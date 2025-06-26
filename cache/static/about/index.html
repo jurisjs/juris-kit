@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About - Juris App</title>
+    
+    <link rel="stylesheet" href="/public/css/styles.css">
+</head>
+<body>
+    <div id="app"><div><div><nav style="padding: 16px; border-bottom: 1px solid #ccc"><a href="/" style="margin-right: 16px">Home</a><a href="/about" style="margin-right: 16px">About</a><a href="/todos" style="margin-right: 16px">Todos</a><a href="/user/123">User Profile</a></nav><div><div style="padding: 20px"><h1>About Us</h1><p>This is a sample Juris application with StringRenderer and SimpleRouter.</p><div id="auto-content" data-swap-id="swap-1750953848556-3ay81">Loading...</div></div></div><div style="padding: 20px">Hydrated and rendered in Rendering time not setms</div></div></div></div><script>
+// Swap handler for element: swap-1750953848556-3ay81
+(function() {
+  const element = document.querySelector('[data-swap-id="swap-1750953848556-3ay81"]');
+  if (!element) return;
+  
+  const swapHandler = async function(e) {
+    
+    
+    try {
+      const response = await fetch('/public/swap.html', {
+        method: 'GET'
+      });
+      
+      if (!response.ok) {
+        throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+      }
+      
+      const html = await response.text();
+      const targetEl = document.querySelector('#auto-content');
+      
+      if (targetEl) {
+        targetEl.innerHTML = html;
+      }
+      
+    } catch (error) {
+      console.error('Swap failed for swap-1750953848556-3ay81:', error);
+    }
+  };
+  
+  
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', swapHandler);
+  } else {
+    setTimeout(swapHandler, 0);
+  }
+})();</script>
+</body>
+</html>

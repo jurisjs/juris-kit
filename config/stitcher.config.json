@@ -1,0 +1,32 @@
+{
+  "output": "public/js/juris-app.js",
+  "files": [
+    "juris/juris.js",
+    {
+      "folder": "source/components",
+      "recursive": true,
+      "extensions": [".js"],
+      "exclude": ["test", ".spec."],
+      "componentAutoRegister": true
+    },
+    {
+      "folder": "source/headless",
+      "recursive": true,
+      "extensions": [".js"],
+      "exclude": ["test", ".spec."],
+      "componentAutoRegister": true
+    },
+    "source/app.js"
+  ],
+  "componentRegistration": {
+    "enabled": true,
+    "globalName": "Juris",
+    "logRegistrations": true,
+    "validateNames": true,
+    "generateManifest": false
+  },
+  "minify": false,
+  "addSeparators": true,
+  "skipMissing": false,
+  "header": "Juris App Bundle - Auto-generated from juris.js + components + app.js"
+}
