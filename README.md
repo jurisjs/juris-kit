@@ -1,345 +1,423 @@
-# Juris Kit 🚀
+# Juris Kit Framework
 
-A powerful, lightweight SSR (Server-Side Rendering) framework with built-in state management, routing, and component system. Juris Kit makes building reactive full-stack applications simple and enjoyable.
-
-[![npm version](https://img.shields.io/npm/v/@jurisjs/juris-kit.svg)](https://www.npmjs.com/package/@jurisjs/juris-kit)
+[![NPM Version](https://img.shields.io/npm/v/juris.svg)](https://www.npmjs.com/package/juris)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/node/v/@jurisjs/juris-kit.svg)](https://nodejs.org)
+[![Performance](https://img.shields.io/badge/Performance-1300%2B%20req%2Fs-green.svg)](#performance)
 
-## Features ✨
+> **The only Non-Blocking Reactive Framework for JavaScript**  
+> Temporal Independent • Automatic Deep Call Stack Branch Aware Dependency Detection • Smart Promise Handling • Component Lazy Compilation • Non-Blocking Rendering
 
-- **🎯 True SSR** - Server-side rendering out of the box with automatic hydration
-- **⚡ Lightning Fast** - Built on Fastify for maximum performance
-- **🔄 Reactive State Management** - Built-in state management with automatic re-renders
-- **🛣️ Smart Routing** - File-based and programmatic routing with SSR support
-- **🧩 Component System** - Simple, powerful component architecture
-- **📦 Zero Config** - Works out of the box with sensible defaults
-- **🔧 Fully Configurable** - Extensive configuration options when you need them
-- **🚀 Production Ready** - Compression, caching, security headers included
-- **🔥 Hot Reload** - Development server with automatic rebuilding
-- **📱 SEO Friendly** - Full SSR support for better SEO
 
-## Quick Start 🏃‍♂️
+## 📚 Resources
 
-### Installation
+- **🏠 Website**: [https://jurisjs.com/](https://jurisjs.com/)
+- **📦 NPM**: [https://www.npmjs.com/package/juris](https://www.npmjs.com/package/juris)
+- **🧰 GitHub Kit**: [https://github.com/jurisjs/juris-kit](https://github.com/jurisjs/juris-kit)
+- **💻 GitHub Core**: [https://github.com/jurisjs/juris](https://github.com/jurisjs/juris)
+- **🎨 Codepen**: [https://codepen.io/jurisauthor](https://codepen.io/jurisauthor)
+- **🧪 Online Testing**: [https://jurisjs.com/tests/juris_pure_test_interface.html](https://jurisjs.com/tests/juris_pure_test_interface.html)
+
+## ✨ Key Features
+
+### 🔄 **Reactive State Management**
+- **Temporal Independent**: State updates don't block rendering
+- **Smart Dependency Detection**: Automatically tracks state dependencies
+- **Deep Call Stack Awareness**: Handles complex nested reactivity
+
+### ⚡ **Non-Blocking Architecture**
+- **Async-First Design**: Native Promise support throughout
+- **Lazy Component Compilation**: Components render only when needed
+- **Smart Promise Handling**: Automatic async/await detection
+
+### 🎨 **Flexible Rendering**
+- **Dual Render Modes**: Fine-grained or batch rendering
+- **Server-Side Rendering**: Built-in SSR with hydration
+- **String Rendering**: Generate HTML strings for any use case
+
+### 🏗️ **Component System**
+- **Functional Components**: Simple function-based components
+- **Lifecycle Hooks**: onMount, onUpdate, onUnmount support
+- **Headless Components**: Logic-only components for state management
+
+### 🌐 **Full-Stack Ready**
+- **Built-in Server**: Fastify-based server with API routes
+- **Static Generation**: Smart static site generation with reactivity detection
+- **Universal API Client**: Works seamlessly on server and client
+
+## 📖 Documentation
+
+## 🚀 Quick Start
 
 ```bash
-npm install @jurisjs/juris-kit
+npm install juris
 ```
-
-### Create a New Project
-
-```bash
-npx juris init my-app
-cd my-app
-npm install
-```
-
-### Start Development Server
-
-```bash
-npm run dev
-# or
-npx juris dev
-```
-
-Your app will be running at `http://localhost:3000` 🎉
-
-## Project Structure 📁
-
-```
-my-app/
-├── juris/                 # Core framework files
-│   ├── juris.js          # Main Juris library
-│   └── server.js         # Server implementation
-├── source/               # Your application code
-│   ├── components/       # Reusable components
-│   ├── layouts/          # Layout components
-│   ├── pages/            # Page components
-│   └── app.js           # App entry point
-├── public/              # Static assets
-│   ├── css/            # Stylesheets
-│   └── js/             # Client-side scripts
-├── scripts/             # Build scripts
-├── config/              # Configuration files
-├── server.js            # Server entry point
-└── juris.config.js      # Main configuration
-```
-
-## Basic Usage 💻
-
-### 1. Create a Component
 
 ```javascript
-// source/components/Counter.js
-const Counter = {
-	state: ["counter"],
+import Juris from 'juris';
 
-	increment() {
-		this.setState("counter", this.state.counter + 1);
-	},
+const app = new Juris({
+  states: { counter: 0 },
+  layout: {
+    div: {
+      text: () => `Count: ${app.getState('counter')}`,
+      children: [{
+        button: {
+          text: 'Increment',
+          onClick: () => app.setState('counter', app.getState('counter') + 1)
+        }
+      }]
+    }
+  }
+});
 
-	render() {
-		return {
-			div: {
-				children: [
-					{ h2: { text: `Count: ${this.state.counter}` } },
-					{
-						button: {
-							text: "Increment",
-							onClick: () => this.increment(),
-						},
-					},
-				],
-			},
-		};
-	},
+app.render('#app');
+```
+
+### Basic State Management
+
+```javascript
+const app = new Juris({
+  states: {
+    user: { name: 'John', age: 30 },
+    todos: []
+  }
+});
+
+// Get state
+const userName = app.getState('user.name');
+
+// Set state
+app.setState('user.age', 31);
+
+// Subscribe to changes
+app.subscribe('user', (newValue, oldValue) => {
+  console.log('User changed:', newValue);
+});
+```
+
+### Component Definition
+
+```javascript
+// Functional Component
+const TodoItem = (props, context) => {
+  const { getState, setState } = context;
+  
+  return {
+    div: {
+      className: () => getState('todos.completed') ? 'completed' : '',
+      text: props.title,
+      onClick: () => setState('todos.completed', !getState('todos.completed'))
+    }
+  };
+};
+
+// Register component
+app.registerComponent('TodoItem', TodoItem);
+
+// Use in layout
+const layout = {
+  div: {
+    children: () => getState('todos').map(todo => ({
+      TodoItem: { title: todo.title, id: todo.id }
+    }))
+  }
 };
 ```
 
-### 2. Create a Page
+### Async Components
 
 ```javascript
-// source/pages/HomePage.js
-const HomePage = {
-	render() {
-		return {
-			div: {
-				class: "home-page",
-				children: [{ h1: { text: "Welcome to Juris!" } }, { Counter: {} }],
-			},
-		};
-	},
+const AsyncUserProfile = async (props, context) => {
+  const userData = await fetch(`/api/users/${props.userId}`).then(r => r.json());
+  
+  return {
+    div: {
+      text: `Welcome, ${userData.name}!`,
+      children: [{
+        img: { src: userData.avatar, alt: userData.name }
+      }]
+    }
+  };
 };
 ```
 
-### 3. Configure Your App
+### Server-Side Rendering
+
+```javascript
+// server.js
+const JurisServer = require('juris/server');
+
+const server = new JurisServer({
+  server: { port: 3000 },
+  app: {
+    title: 'My Juris App',
+    initialState: { message: 'Hello World' }
+  },
+  features: {
+    ssr: true,
+    api: true,
+    compression: true
+  }
+});
+
+server.start();
+```
+
+### API Integration
+
+```javascript
+// Headless API Component
+const createAPI = (endpoints, context) => {
+  const { getState, setState } = context;
+  
+  return {
+    api: {
+      async fetchUsers() {
+        setState('users.loading', true);
+        try {
+          const users = await fetch('/api/users').then(r => r.json());
+          setState('users.data', users);
+        } finally {
+          setState('users.loading', false);
+        }
+      }
+    }
+  };
+};
+
+app.registerHeadlessComponent('API', createAPI);
+```
+
+### Static Site Generation
 
 ```javascript
 // juris.config.js
 module.exports = {
-	server: {
-		port: 3000,
-		host: "0.0.0.0",
-	},
-	app: {
-		title: "My Juris App",
-		initialState: {
-			counter: 0,
-		},
-	},
+  htmlCache: {
+    generation: {
+      enabled: true,
+      outputDir: 'dist',
+      routes: ['/', '/about', '/contact'],
+      ttl: 300000, // 5 minutes
+      minifyHTML: true
+    }
+  }
 };
+
+// Generate static files
+npx juris generate
 ```
 
-## Configuration 🔧
+## 🏗️ Project Structure
 
-Juris Kit uses a powerful configuration system via `juris.config.js`:
+```
+my-juris-app/
+├── config/
+│   └── juris.config.js     # Server configuration
+├── public/
+│   ├── css/
+│   │   └── styles.css      # Stylesheets
+│   └── js/
+│       └── juris-app.js    # Client-side app
+├── source/
+│   ├── components/         # Reusable components
+│   ├── headless/          # Headless components
+│   └── app.js             # Main application
+├── services/
+│   └── db.query.js        # Database services
+└── package.json
+```
+
+## 🎯 Advanced Features
+
+### Smart Attribute Swapping
 
 ```javascript
-module.exports = {
-	// Server configuration
-	server: {
-		port: process.env.PORT || 3000,
-		host: "0.0.0.0",
-		fastify: {
-			logger: true,
-			// All Fastify options...
-		},
-	},
-
-	// Application settings
-	app: {
-		title: "My App",
-		meta: {
-			// SEO meta tags
-		},
-		initialState: {
-			// Initial application state
-		},
-	},
-
-	// Static file serving
-	static: {
-		public: {
-			root: "public",
-			prefix: "/public/",
-			cache: {
-				maxAge: "1d",
-			},
-		},
-	},
-
-	// Routing configuration
-	routes: {
-		pages: {
-			"/": { title: "Home" },
-			"/about": { title: "About" },
-		},
-	},
-
-	// And much more...
-};
+// Add swap functionality for dynamic content updates
+{
+  button: {
+    text: 'Load More',
+    swap: {
+      trigger: 'click',
+      url: '/api/more-content',
+      target: '#content-area'
+    }
+  }
+}
 ```
 
-## CLI Commands 🛠️
-
-```bash
-# Start production server
-juris start
-
-# Start development server with hot reload
-juris dev
-
-# Build your application
-juris build
-
-# Create new project
-juris init [project-name]
-
-# Show current configuration
-juris config
-```
-
-## Advanced Features 🚀
-
-### State Management
+### DOM Enhancement
 
 ```javascript
-// Global state management
-const app = createApp({
-	states: {
-		user: { name: "Guest", isLoggedIn: false },
-		todos: [],
-	},
+// Enhance existing HTML elements
+app.enhance('.dropdown', {
+  onClick: (e) => {
+    e.target.classList.toggle('open');
+  },
+  style: {
+    cursor: 'pointer'
+  }
 });
-
-// Access state in components
-const UserProfile = {
-	state: ["user"],
-	render() {
-		return {
-			div: {
-				text: `Hello, ${this.state.user.name}!`,
-			},
-		};
-	},
-};
 ```
 
-### Routing
+### Local Component State
 
 ```javascript
-// Headless router component
-const SimpleRouter = {
-	routes: {
-		"/": HomePage,
-		"/about": AboutPage,
-		"/todos": TodosPage,
-		"/user/:id": UserPage,
-	},
+const Counter = (props, context) => {
+  const [count, setCount] = context.newState('count', 0);
+  
+  return {
+    div: {
+      text: () => `Count: ${count()}`,
+      children: [{
+        button: {
+          text: 'Increment',
+          onClick: () => setCount(count() + 1)
+        }
+      }]
+    }
+  };
 };
 ```
 
-### Lifecycle Hooks
+## 🚀 Performance
+
+Juris delivers exceptional performance in production environments:
+
+```
+Artillery Load Test Results:
+├── Requests per second: 1,332 req/s
+├── Average response time: 9.6ms
+├── 95th percentile: 15ms
+├── 99th percentile: 19.1ms
+└── Zero failed requests (50,000 total)
+```
+
+### Performance Features
+- **Non-blocking reactivity**: UI stays responsive during state updates
+- **Smart caching**: Automatic caching of async operations
+- **Efficient reconciliation**: Minimal DOM updates
+- **Bundle size optimization**: Tree-shaking and code splitting ready
+
+## 🔧 Configuration
+
+### Complete Configuration Example
 
 ```javascript
 // juris.config.js
 module.exports = {
-	hooks: {
-		beforeServerStart: async (fastify, config) => {
-			// Initialize services
-		},
-		beforeRender: async (app, route, config) => {
-			// Modify app state before SSR
-		},
-		afterRender: async (html, state, route, config) => {
-			// Transform HTML after rendering
-			return { html, state };
-		},
-	},
+  server: {
+    port: 3000,
+    host: '0.0.0.0',
+    compression: { enabled: true }
+  },
+  
+  app: {
+    title: 'My Juris Application',
+    initialState: {
+      theme: 'dark',
+      user: null
+    }
+  },
+  
+  api: {
+    prefix: '/api',
+    cors: { enabled: true },
+    endpoints: {
+      '/users': {
+        method: 'GET',
+        handler: async (req, reply) => {
+          return await db.users.findAll();
+        }
+      }
+    }
+  },
+  
+  htmlCache: {
+    generation: {
+      enabled: true,
+      outputDir: 'dist',
+      routes: ['/', '/about', '/products'],
+      ttl: 300000,
+      minifyHTML: true
+    }
+  },
+  
+  routes: {
+    catchAll: true,
+    pages: {
+      '/': { title: 'Home' },
+      '/about': { title: 'About Us' }
+    }
+  }
 };
 ```
 
-## API Reference 📚
+## 🧪 Testing
 
-### JurisServer
-
-```javascript
-const { JurisServer } = require("@jurisjs/juris-kit");
-
-const server = new JurisServer("./custom-config.js");
-await server.start();
-```
-
-### createApp
-
-```javascript
-const { createApp } = require("@jurisjs/juris-kit");
-
-const app = createApp({
-	states: {
-		/* initial state */
-	},
-	components: {
-		/* components */
-	},
-	layout: {
-		/* layout definition */
-	},
-});
-```
-
-## Performance 🏎️
-
-Juris Kit is built for speed:
-
-- ⚡ Sub-millisecond hydration times
-- 🚀 Fastify-powered server (30k+ requests/sec)
-- 📦 Automatic code splitting
-- 🗜️ Built-in compression
-- 💾 Smart caching strategies
-- 🔄 Efficient re-rendering
-
-## Production Deployment 🌐
+Run the comprehensive test suite:
 
 ```bash
-# Build for production
-npm run build
+# Run unit tests
+npm test
 
-# Start production server
-NODE_ENV=production npm start
-# or
-juris start --production
+# Run integration tests  
+npm run test:integration
+
+# Run performance tests
+npm run test:performance
+
+# Test in browser
+open https://jurisjs.com/tests/juris_pure_test_interface.html
 ```
 
-### Docker Support
-
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-RUN npm run build
-EXPOSE 3000
-CMD ["npm", "start"]
-```
-
-## Contributing 🤝
+## 🤝 Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-## License 📄
+### Development Setup
 
-MIT © [Juris Team]
+```bash
+git clone https://github.com/jurisjs/juris
+cd juris
+npm install
+npm run dev
+```
 
-## Support 💬
+### Code Style
 
-- 📖 [Documentation](https://jurisjs.org/docs)
-- 💬 [Discord Community](https://discord.gg/jurisjs)
-- 🐛 [Issue Tracker](https://github.com/jurisjs/juris-kit/issues)
-- 🐦 [Twitter](https://twitter.com/jurisjs)
+```javascript
+// Use compressed object structure with end labels
+return {
+  div: { className: 'main',
+    text: () => getState('reactive.text.value', 'Hello'),
+    style: { color: 'red', border: 'solid 1px blue' },
+    children: [
+      { button: { text: 'static label',
+        onClick: () => clickHandler()
+      }}, //button
+      { input: { type: 'text', min: '1', max: '10',
+        value: () => getState('counter.step', 1),
+        oninput: (e) => {
+          const newStep = parseInt(e.target.value) || 1;
+          setState('counter.step', Math.max(1, Math.min(10, newStep)));
+        }
+      }} //input
+    ]
+  } //div.main
+}; //return
+```
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+Special thanks to all contributors and the JavaScript community for inspiration and feedback.
 
 ---
 
-Made with ❤️ by the Juris Team
+**Built with ❤️ by the Juris Team**
+
+*Juris Framework - Making JavaScript reactive, non-blocking, and delightful to work with.*
