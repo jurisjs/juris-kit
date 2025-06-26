@@ -45,7 +45,7 @@ Help us identify and fix issues by reporting bugs with detailed information:
 
 **Where to Report:**
 
-- GitHub Issues: [https://github.com/jurisjs/juris/issues](https://github.com/jurisjs/juris/issues)
+- GitHub Issues: [https://github.com/jurisjs/juris/issues](https://github.com/jurisjs/juris-kit/issues)
 - Use the "Bug Report" template when available
 
 ### ❓ Questions and Discussions
@@ -63,7 +63,7 @@ Your questions help us understand developer needs and improve documentation:
 
 **Where to Ask:**
 
-- GitHub Discussions: [https://github.com/jurisjs/juris/discussions](https://github.com/jurisjs/juris/discussions)
+- GitHub Discussions: [https://github.com/jurisjs/juris/discussions](https://github.com/jurisjs/juris-kit/discussions)
 - Community forums and Discord (when available)
 - Stack Overflow with the `juris` tag
 
