@@ -27,20 +27,18 @@ and `// console.warn: …` a line it writes on the console. Every example runs, 
 checked: `node scripts/check-examples.mjs REFERENCE.md`, in this package.
 
 **Where it stands (2026-10-02; "Open" and "Not yet" re-checked against the code that day: none of
-them is closed).** Juris runs two real-time sites in production, and `app/hello`, the smallest app
-on it. They work around, in their own code, the issues this version fixes (F1–F27), and are being
-moved to it. Until then the framework as described here runs on the QA server and in the tests. The
-framework's suites are each package's `npm test` and `juris-tests`, which holds both packages to
-every line. "Not yet", at the end, lists what is missing.
+them is closed).** The framework's suites are each package's `npm test` and `juris-tests`, which
+holds both packages to every line. "Not yet", at the end, lists what is missing.
 
 ## Contents
 
-- [Your first app](#your-first-app): `app/hello`, file by file, and what happens on a request
+- [Your first app](#your-first-app): five files of your own, and what happens on a request
 - [Why it is built this way](#why-it-is-built-this-way): the problems Juris was designed around
 - [The boundary](#the-boundary): what may go in `src/`, and the test that holds it
 - [The page contract](#the-page-contract): `#app`, `#state`, `#services`, `start()`, and in development `#juris-dev`
 - [Reserved state roots](#reserved-state-roots): `$route`, `$ssr`, `$local`, `$async`, `$server`, `$live`
-- [The public API](#the-public-api): components, the component api, and every module
+- [The public API](#the-public-api): components, the component api, `enhance`, layouts from a
+  database, and every module
 - [What the framework stores in a browser](#what-the-framework-stores-in-a-browser): `STORAGE`
 - [The browser floor](#the-browser-floor): the oldest browsers it runs in
 - [Security defaults and invariants](#security-defaults-and-invariants): each with its code and its test
@@ -48,62 +46,170 @@ every line. "Not yet", at the end, lists what is missing.
 
 ## Your first app
 
-`app/hello` is the template for a new app: five files, and none of them plumbing. Its test builds
-the whole app on in-memory services (no database), renders `/` and a 404, and fails if hello grows
-an HTTP server, a document, a module matcher or a 500 of its own.
+A whole app is five files, and none of them is plumbing. Write them yourself, in a new folder of
+your own, and `node server.mjs` serves the app on http://127.0.0.1:3000.
 
 | File | What it holds | Runs |
 | --- | --- | --- |
-| `app/hello/client/app.js` | The app itself: its routes, the words around every title, and `register(juris)`, which registers its components. | Both sides: the server renders with it, the browser boots with it |
-| `app/hello/client/boot.js` | The browser entry. The page imports it once the page is idle, and calls its `start()`. | Browser |
-| `app/hello/services.js` | What the app does, as services. Never mounted, so no browser is served it. | Node |
-| `app/hello/app.mjs` | `createApp`: one `createJurisServer` call, with the services passed in, so a test can pass its own. | Node |
-| `app/hello/server.mjs` | The only file that reads the environment and touches the process: it listens, and closes on a signal. | Node |
+| `client/app.js` | The app itself: its routes, the words around every title, and `register(juris)`, which registers its components. | Both sides: the server renders with it, the browser boots with it |
+| `client/boot.js` | The browser entry. The page imports it once the page is idle, and calls its `start()`. | Browser |
+| `services.js` | What the app does, as services. Never mounted, so no browser is served it. | Node |
+| `app.mjs` | `createApp`: one `createJurisServer` call, with the services passed in, so a test can pass its own. | Node |
+| `server.mjs` | The only file that reads the environment and touches the process: it listens, and closes on a signal. | Node |
 
-Run it with `node app/hello/server.mjs` (development, on http://127.0.0.1:3000), or in production
-mode with `PROD=1 BUILD=b1 PORT=3001 node app/hello/server.mjs`.
+Start the folder, on Node 24 or later. `type=module` makes every `.js` file in it an ES module:
 
-The app, the same on both sides (`client/app.js`, its comments left out):
+```sh
+mkdir my-app
+cd my-app
+npm init -y
+npm pkg set type=module
+npm install juris-kit
+mkdir client
+```
+
+`client/app.js`, the same on both sides:
 
 ```js
 export const routes = [
-    { path: "/", name: "home", component: "Home", preload: () => [["greeting", "world"]], head: { title: "Hello" } },
-    { path: "*", name: "missing", component: "NotFound", head: { title: "Not found" } },
+    {
+        path: "/",
+        name: "home",
+        component: "Home",
+        preload: () => [["greeting", "world"]],
+        head: { title: "Hello" },
+    },
+    {
+        path: "*",
+        name: "missing",
+        component: "NotFound",
+        head: { title: "Not found" },
+    },
 ];
+
 export const title = { suffix: " · Hello", fallback: "Hello" };
+
 export function register(juris) {
-    juris.registerComponent("App", () => ({ main: { children: [{ RouterView: {} }] } }));
+    juris.registerComponent("App", () => ({
+        main: { children: [{ RouterView: {} }] },
+    }));
     juris.registerComponent("Home", (props, api) => {
         api.live("greeting", "greeting", "world");
-        return { h1: { textContent: () => api.getState("greeting")?.text ?? "" } };
+        return {
+            h1: { textContent: () => api.getState("greeting")?.text ?? "" },
+        };
     });
-    juris.registerComponent("NotFound", () => ({ p: { textContent: "Nothing here." } }));
+    juris.registerComponent("NotFound", () => ({
+        p: { textContent: "Nothing here." },
+    }));
 }
 ```
 
-Its service (`services.js`), and the server (`app.mjs`):
+`client/boot.js`, the browser's entry. The kit serves the `juris` package at `/src/`:
 
-```js excerpt
+```js browser
+import { hydrate } from "/src/client.js";
+import { routes, register, title } from "./app.js";
+
+export const start = () => hydrate({ routes, register, title });
+```
+
+`services.js`, what the app does:
+
+```js
 import { fail } from "juris/errors.js";
+
 export const services = {
     async greeting(name) {
-        if (typeof name !== "string" || !name.trim()) fail("Say who to greet.", { fields: { name: "Required." } });
+        if (typeof name !== "string" || !name.trim()) {
+            fail("Say who to greet.", { fields: { name: "Required." } });
+        }
         return { text: `Hello, ${name.trim().slice(0, 60)}` };
     },
 };
-
-import { createJurisServer } from "juris-kit/server/kernel.js";
-import { routes, register, title } from "./client/app.js";
-export const createApp = ({ services, dev = false, build = "dev" }) => createJurisServer({
-    root: new URL("../..", import.meta.url), dev, build, services, routes, setup: register,
-    api: { live: { public: true, queries: ["greeting"], touches: {} } },
-    modules: { mounts: [{ url: "/app/hello/client/", dir: "app/hello/client" }], entry: "/app/hello/client/boot.js" },
-    page: { title },
-});
 ```
 
-And the browser entry (`client/boot.js`): `export const start = () => hydrate({ routes, register, title });`,
-with `hydrate` imported from `/src/client.js`.
+`app.mjs`, the server:
+
+```js excerpt
+import { createJurisServer } from "juris-kit/server/kernel.js";
+import { routes, register, title } from "./client/app.js";
+
+export function createApp({ services, dev = false, build = "dev" }) {
+    return createJurisServer({
+        root: new URL(".", import.meta.url),
+        dev,
+        build,
+        services,
+        routes,
+        setup: register,
+        api: {
+            live: { public: true, queries: ["greeting"], touches: {} },
+        },
+        modules: {
+            mounts: [{ url: "/client/", dir: "client" }],
+            entry: "/client/boot.js",
+        },
+        page: { title },
+    });
+}
+```
+
+`server.mjs`, the process:
+
+```js excerpt
+import { createApp } from "./app.mjs";
+import { services } from "./services.js";
+
+const app = await createApp({
+    services,
+    dev: !process.env.PROD,
+    build: process.env.BUILD,
+});
+const { url } = await app.listen({
+    port: Number(process.env.PORT ?? 3000),
+});
+console.log(`listening on ${url}`);
+
+async function stop() {
+    await app.close();
+    process.exit(0);
+}
+process.once("SIGINT", stop);
+process.once("SIGTERM", stop);
+```
+
+Run it with `node server.mjs` (development, on http://127.0.0.1:3000), or in production mode with
+`PROD=1 BUILD=b1 PORT=3001 node server.mjs`.
+
+A test is a sixth file, `app.test.mjs`, and `node --test` runs it. It builds the whole app on
+in-memory services (no database), and renders `/` and a 404:
+
+```js excerpt
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createApp } from "./app.mjs";
+
+const services = {
+    greeting: async (name) => ({ text: `Hi, ${name}` }),
+};
+
+test("renders / and a 404", async () => {
+    const app = await createApp({ services });
+    const { url } = await app.listen();
+    try {
+        const home = await fetch(url);
+        assert.equal(home.status, 200);
+        assert.match(await home.text(), /<h1[^>]*>Hi, world<\/h1>/);
+
+        const missing = await fetch(`${url}/nowhere`);
+        assert.equal(missing.status, 404);
+        assert.match(await missing.text(), /Nothing here\./);
+    } finally {
+        await app.close();
+    }
+});
+```
 
 **What happens when a browser asks for `/`.**
 
@@ -117,15 +223,15 @@ with `hydrate` imported from `/src/client.js`.
    (the `suffix` follows only a name a page takes from its own data, `head.titleFrom`).
 4. The kernel writes the document: the markup in `#app`, the state it rendered with in `#state`,
    the callable service names in `#services`, and a loader that imports
-   `/app/hello/client/boot.js?v=<hash>-<code id>` once the page is idle and calls its `start()`.
-   A guest's page could be cached; hello passes no cache.
+   `/client/boot.js?v=<hash>-<code id>` once the page is idle and calls its `start()`.
+   A guest's page could be cached; this app passes no cache.
 5. In the browser, `hydrate` reads `#state` and `#services`, builds the instance with a stub for
    `greeting` that posts to `/api/greeting`, installs the router and the live client, registers the
    components, draws the page again into `#app` (the same markup, now live) and binds the title.
 6. `api.live` subscribes to the `greeting` query over the page's one event stream (`/api/events`).
-   Hello has no mutation, but a service listed in `live.touches` as touching `greeting` would make
-   the server run the query again once per change and send each subscribed page only the leaves
-   that changed.
+   This app has no mutation, but a service listed in `live.touches` as touching `greeting` would
+   make the server run the query again once per change and send each subscribed page only the
+   leaves that changed.
 
 A service's refusal is written for the person reading it: `fail("Say who to greet.", { fields })`
 reaches the caller with its words and its field messages, and any other error reads "request
@@ -144,12 +250,14 @@ failed" while its detail goes to the server's log.
 - A page cache and a change bus, for several instances, are options of the kernel and the
   dispatcher (`server/kernel.js`, `server/page-cache.js`, `server/bus/pg-outbox.js`).
 
-**What hello does not show: signing in.** A members app writes these itself today: a request
+**What this app does not show: signing in.** A members app writes these itself today: a request
 context (the dispatcher's `context(req, res)`) that reads its session cookie with `parseCookies`,
 sets and clears that cookie with `serializeCookie` and `appendSetCookie`, a rule that a viewer
 passed as an argument is believed only on a call of kind `"preload"` or `"live"` (`callKind`), and
 `live.authorize` rules that match such an argument to the session. That is the code that decides
-who sees what, and it is not in the framework yet ("Not yet").
+who sees what, and it is not in the framework yet ("Not yet"). A context is kept for as long as a
+subscription lives, so it holds the response only on the calls that write the cookie
+("`server/service-dispatcher.js`", "A subscribe's context outlives its request").
 
 ## Why it is built this way
 
@@ -412,9 +520,9 @@ follows is stamped, and nothing else in the text changes"),
 **What it costs.**
 
 - More requests.
-  - `app/hello`'s page loads 14 modules, each a request of its own: about 38 KB gzipped in all
-    (measured 2026-09-26, file by file, with the framework's own minifier, when `ssr-renderer.js`
-    was still one of them: below), where a bundler would usually send a few files.
+  - The page in "Your first app" loads 13 modules, each a request of its own: about 45 KB gzipped
+    in all (measured 2026-11-07, file by file, with the framework's own minifier), where a bundler
+    would usually send a few files.
 
     ```js
     const modules = await createModuleServer({
@@ -2988,8 +3096,8 @@ const leaf = await readFile(new URL("errors.js", browserHalf), "utf8");
 leaf.includes(" from "); // → false
 ```
 
-It has no allow-list. It started with eight breaches: seven comments that told one app's stories or
-cited its documents, now written as the rules they guard, and a read of `NODE_ENV` for the
+It has no allow-list. It started with eight breaches: seven comments that told an app's story
+instead of the rule they guard, now written as the rules, and a read of `NODE_ENV` for the
 development-mode warning, now gone (the warning keys off `devMode`, which the app passes).
 
 ```js dom
@@ -3516,7 +3624,8 @@ export const start = () => hydrate({ routes, register, title });
 ```
 
 The app's own shared modules, for plugins and helpers (`/src/forms.js`, `/src/clock.js`, … in a
-browser), by package path in Node:
+browser), by package path in Node; a file that runs on both sides is given them instead (below,
+under "`client/app.js`"):
 
 ```js
 const forms = await import("juris/forms.js");
@@ -3580,6 +3689,60 @@ juris.setValue("cart.count", 2);
 juris.renderToString({ CartCount: {} }); // → <span>2 items</span>
 ```
 
+A file that runs on both sides (`client/app.js`) can import neither address of a helper that is not
+on `api`: Node has no `/src/live-data.js`, and a browser cannot resolve `juris/live-data.js`.
+
+```js
+await import("/src/live-data.js");
+// throws Error: Cannot find module
+```
+
+So its `register` takes the helper as an argument, and each side's entry, which knows its own
+address, imports it and passes it in. The server's entry, by package path:
+
+```js
+import Juris from "juris/juris.js";
+import SSRRenderer from "juris-kit/server/ssr-renderer.js";
+import { createRouter } from "juris/router.js";
+import { useRouteData } from "juris/live-data.js";
+
+// client/app.js: runs on both sides, so it imports nothing.
+function register(juris, { useRouteData }) {
+    juris.registerComponent("OrderPage", (props, api) => {
+        const order = useRouteData(api, "order", ["id"]);
+        return { h1: { textContent: () => `${order()?.total} €` } };
+    });
+}
+
+// app.mjs: `setup: (juris) => register(juris, { useRouteData })`.
+const juris = new Juris({
+    services: { order: async () => ({ total: 12 }) },
+    features: { ssr: SSRRenderer },
+});
+juris.use(createRouter({ routes: [{ path: "/orders/:id" }] }));
+register(juris, { useRouteData });
+const page = await juris.renderRequest({
+    preload: [["order", "7"]],
+    state: { $route: { path: "/orders/7" } },
+    layout: { OrderPage: {} },
+});
+page.html; // → <h1>12 €</h1>
+```
+
+The browser's entry, by URL:
+
+```js excerpt
+import { hydrate } from "/src/client.js";
+import { useRouteData } from "/src/live-data.js";
+import { routes, register, title } from "./app.js";
+
+export const start = () => hydrate({
+    routes,
+    title,
+    register: (juris) => register(juris, { useRouteData }),
+});
+```
+
 ### Components and layouts
 
 The examples on this page share one instance, given the kit's string renderer, so a layout is shown
@@ -3632,6 +3795,54 @@ juris.render(page, { CartBadge: {} });
 page.innerHTML; // → <em>Cart empty</em>
 juris.setValue("cart.count", 2);
 page.innerHTML; // → <strong>2 in cart</strong>
+```
+
+A definition returns its layout at once, so an `async` one draws nothing, keyed or not, and in
+`devMode` it says so:
+
+```js
+const dev = new Juris({ devMode: true, features: { ssr: SSRRenderer } });
+dev.registerComponent("Orders", async () => ({ p: "Your orders" }));
+dev.renderToString({ div: { children: [{ Orders: { key: 7 } }] } });
+// → <div></div>
+// console.warn: Juris: dropped component "Orders": its definition returned a
+//   promise
+```
+
+To wait for a layout, keep the definition plain and return a function that returns the promise. In a
+browser the place fills when it settles; a server cannot wait for it, and renders the place empty.
+
+```js dom
+juris.registerComponent("Orders", () => () => {
+    return Promise.resolve({ p: "Your orders" });
+});
+const page = document.createElement("main");
+juris.render(page, { Orders: {} });
+page.innerHTML; // → ""
+await new Promise((resolve) => setTimeout(resolve));
+page.innerHTML; // → <p>Your orders</p>
+```
+
+An `async` definition that rejects goes to the console, and is no unhandled rejection. Under
+[`enhance`](#enhance) nothing can be drawn into the element, so an `async` component throws there.
+
+```js
+juris.registerComponent("Orders", async () => {
+    throw new Error("the database is down");
+});
+juris.renderToString({ Orders: {} }); // → ""
+await new Promise((resolve) => setTimeout(resolve));
+// console.error: Juris: component "Orders": its async definition rejected
+```
+
+```js dom
+juris.registerComponent("Orders", async () => ({ p: "Your orders" }));
+const page = document.createElement("main");
+document.body.appendChild(page);
+page.innerHTML = "<p>Loading</p>";
+juris.enhance("p", { Orders: {} });
+// throws Error: Juris.enhance: component "Orders" must return an element layout
+//   to adopt <p>
 ```
 
 A name is registered once per instance: `registerComponent` refuses a second definition, and
@@ -5302,6 +5513,64 @@ page.querySelector("ul").outerHTML;
 page.querySelector("li") === first; // → true
 ```
 
+Keys work only when every row has one of its own. One duplicate or unkeyed row sends the whole list
+back to matching by place: each element stays where it is and takes the layout of that place, so a
+row's element and state stay with its place, not its item.
+
+```js dom
+juris.setValue("todos", [
+    { id: 1, title: "Milk" },
+    { id: 2, title: "Eggs" },
+    { title: "Bread" },
+]);
+const page = document.createElement("main");
+juris.render(page, {
+    ul: {
+        children: () => juris.getState("todos").map((todo) => ({
+            li: { key: todo.id, textContent: todo.title },
+        })),
+    },
+});
+const first = page.querySelector("li");
+juris.updateState("todos", ([milk, eggs, bread]) => [eggs, milk, bread]);
+page.innerHTML; // → <ul><li>Eggs</li><li>Milk</li><li>Bread</li></ul>
+page.querySelector("li") === first; // → true
+```
+
+`devMode` says so, for a key on two rows and for a row with none, and is silent for a list with no
+keys at all, which is matched by place on purpose:
+
+```js dom
+const dev = new Juris({ devMode: true });
+dev.setValue("keys", [1, 2, 2]);
+dev.render(document.createElement("main"), {
+    ul: {
+        children: () => dev.getState("keys").map((key) => ({
+            li: { key, textContent: "Milk" },
+        })),
+    },
+});
+// console.warn: Juris: dropped the keys of the list in <ul>: key 2 is on two
+//   rows
+dev.setValue("keys", [1, undefined]);
+// console.warn: Juris: dropped the keys of the list in <ul>: row 2 has no key
+```
+
+A function as the element's whole content gives text, so a list it returns is ignored; `devMode` points
+at `children`, the rule being `"layout-in-value"`:
+
+```js
+const dev = new Juris({ devMode: true, features: { ssr: SSRRenderer } });
+const groceries = () => [{ li: "Milk" }];
+dev.renderToString({ ul: groceries }); // → <ul></ul>
+// console.warn: Juris: <ul> was given a function as its whole content, which
+//   gives text
+dev.renderToString({ ul: { children: groceries } });
+// → <ul><li>Milk</li></ul>
+```
+
+What a change to a long list costs is in [Long lists](#long-lists).
+
 #### Tables
 
 In a `table`, `thead` and `tbody` hold `tr` rows of `th` and `td` cells, one keyed row per line:
@@ -5545,6 +5814,17 @@ juris.renderToString({ Cart: { items } });
 //   </ul></section>
 ```
 
+A string or a number as the content arrives as `props.textContent`:
+
+```js
+juris.registerComponent("Note", (props) => ({
+    p: { className: "note", textContent: props.textContent },
+}));
+juris.renderToString({ Note: "Back in stock" });
+// → <p class="note">Back in stock</p>
+juris.renderToString({ Note: 12 }); // → <p class="note">12</p>
+```
+
 `children` given to a component is a prop like the others; the component puts it where it goes:
 
 ```js
@@ -5708,6 +5988,231 @@ page.innerHTML;
 // → <p><span>Read once: 1. </span><span>Now: 5</span></p>
 ```
 
+### Long lists
+
+The examples on this page share one instance, and draw a list into a page:
+
+```js setup
+import Juris from "juris/juris.js";
+
+const juris = new Juris();
+```
+
+What a change to a list costs depends on what its rows are. The numbers here are approximate,
+measured in Chrome at 1,000 rows on 2026-11-08; a row's own work comes on top.
+
+| Rows | The change | About |
+| --- | --- | --- |
+| Plain elements | Any change to the list | 13 ms |
+| Components, props unchanged | Swapping two rows | 3 to 4 ms |
+| Components, props from `getState` | Removing a row | 15 ms |
+| Components, props from `toRaw` | Removing a row | 2 ms |
+
+- With plain element rows, any change to the list costs about 13 ms: `updateElement` tears down and
+  reapplies every row it keeps.
+
+  ```js dom
+  juris.setValue("rows", ["Milk", "Eggs", "Bread"]);
+  let applied = 0;
+  const row = (label) => ({
+      li: {
+          key: label,
+          textContent: () => {
+              applied += 1;
+              return label;
+          },
+      },
+  });
+  const page = document.createElement("main");
+  juris.render(page, {
+      ul: { children: () => juris.getState("rows").map(row) },
+  });
+  applied = 0;
+  juris.setValue("rows", ["Bread", "Eggs", "Milk"]);
+  applied; // → 3
+  ```
+
+  - A redraw leaves alone text and attributes that already hold the given value: the text node is kept,
+    so the browser does not lay out again a row that did not change.
+
+    ```js dom
+    juris.setValue("rows", ["Milk", "Eggs"]);
+    const page = document.createElement("main");
+    juris.render(page, {
+        ul: {
+            children: () => juris.getState("rows").map((label) => ({
+                li: { key: label, title: label, textContent: label },
+            })),
+        },
+    });
+    const milk = page.querySelector("li");
+    const text = milk.firstChild;
+    let writes = 0;
+    const write = milk.setAttribute;
+    milk.setAttribute = function (...args) {
+        writes += 1;
+        return write.apply(this, args);
+    };
+    juris.setValue("rows", ["Milk", "Eggs", "Bread"]);
+    milk.firstChild === text; // → true
+    writes; // → 0
+    ```
+
+  - A list none of whose rows stay is emptied in one step, not row by row.
+
+    ```js dom
+    juris.setValue("rows", ["Milk", "Eggs"]);
+    const page = document.createElement("main");
+    juris.render(page, {
+        ul: {
+            children: () => juris.getState("rows").map((label) => ({
+                li: { key: label, textContent: label },
+            })),
+        },
+    });
+    const rows = [...page.querySelectorAll("li")];
+    let removed = 0;
+    for (const row of rows) {
+        row.remove = () => {
+            removed += 1;
+        };
+    }
+    juris.setValue("rows", ["Bread"]);
+    page.innerHTML; // → <ul><li>Bread</li></ul>
+    removed; // → 0
+    ```
+
+- Rows as components with unchanged props are skipped, so a swap drops to about 3 to 4 ms. Props are
+  compared one by one with `Object.is` (a ref by its path), so text and numbers count as unchanged
+  when they read the same, and a new object or function each time counts as changed.
+
+  ```js dom
+  juris.setValue("rows", ["Milk", "Eggs", "Bread"]);
+  let drawn = 0;
+  juris.registerComponent("Row", ({ label }) => {
+      drawn += 1;
+      return { li: label };
+  });
+  const page = document.createElement("main");
+  juris.render(page, {
+      ul: {
+          children: () => juris.getState("rows").map((label) => ({
+              Row: { key: label, label },
+          })),
+      },
+  });
+  drawn = 0;
+  juris.setValue("rows", ["Bread", "Eggs", "Milk"]);
+  page.innerHTML; // → <ul><li>Bread</li><li>Eggs</li><li>Milk</li></ul>
+  drawn; // → 0
+  ```
+
+- Inside a list function `getState` hands out tracking proxies, each tied to its path. A row behind a
+  removal sits at a new index, so it gets a new proxy, its prop has changed, and it is redrawn.
+
+  ```js dom
+  juris.setValue("rows", [
+      { id: 1, label: "Milk" },
+      { id: 2, label: "Eggs" },
+      { id: 3, label: "Bread" },
+  ]);
+  let drawn = 0;
+  juris.registerComponent("Row", ({ item }) => {
+      drawn += 1;
+      return { li: { textContent: () => item.label } };
+  });
+  const page = document.createElement("main");
+  juris.render(page, {
+      ul: {
+          children: () => juris.getState("rows").map((item) => ({
+              Row: { key: item.id, item },
+          })),
+      },
+  });
+  drawn = 0;
+  juris.updateState("rows", (rows) => rows.slice(1));
+  drawn; // → 2
+  ```
+
+- `juris.toRaw(juris.getState("rows"))` hands the rows out as they are, so a kept row's prop is the
+  same object, and a removal costs about 2 ms instead of about 15 ms.
+
+  ```js dom
+  juris.setValue("rows", [
+      { id: 1, label: "Milk" },
+      { id: 2, label: "Eggs" },
+      { id: 3, label: "Bread" },
+  ]);
+  let drawn = 0;
+  juris.registerComponent("Row", ({ item }) => {
+      drawn += 1;
+      return { li: item.label };
+  });
+  const page = document.createElement("main");
+  juris.render(page, {
+      ul: {
+          children: () => juris.toRaw(juris.getState("rows")).map((item) => ({
+              Row: { key: item.id, item },
+          })),
+      },
+  });
+  drawn = 0;
+  juris.updateState("rows", (rows) => rows.slice(1));
+  page.innerHTML; // → <ul><li>Eggs</li><li>Bread</li></ul>
+  drawn; // → 0
+  ```
+
+- **The trade-off.** Props given raw are not tracked: a row reading `item.label` in a binding does
+  **not** see a later write to `rows.1.label`. Use `toRaw` only when rows take new objects to change.
+  That is a choice for each list: a row that must follow writes to its own fields keeps the proxy,
+  and pays for it on a removal.
+
+  ```js dom
+  juris.setValue("rows", [
+      { id: 1, label: "Milk" },
+      { id: 2, label: "Eggs" },
+  ]);
+  juris.registerComponent("Row", ({ item }) => ({
+      li: { textContent: () => item.label },
+  }));
+  const page = document.createElement("main");
+  juris.render(page, {
+      ul: {
+          children: () => juris.toRaw(juris.getState("rows")).map((item) => ({
+              Row: { key: item.id, item },
+          })),
+      },
+  });
+  // A write to the field: the state changes, the row does not see it.
+  juris.setValue("rows.1.label", "Bread");
+  juris.getState("rows.1.label"); // → "Bread"
+  page.innerHTML; // → <ul><li>Milk</li><li>Eggs</li></ul>
+  // A new object: the prop has changed, so the row is drawn again.
+  juris.updateState("rows", (rows) => rows.map((row) => ({ ...row })));
+  page.innerHTML; // → <ul><li>Milk</li><li>Bread</li></ul>
+  ```
+
+  ```js dom
+  juris.setValue("rows", [
+      { id: 1, label: "Milk" },
+      { id: 2, label: "Eggs" },
+  ]);
+  juris.registerComponent("Row", ({ item }) => ({
+      li: { textContent: () => item.label },
+  }));
+  const page = document.createElement("main");
+  juris.render(page, {
+      ul: {
+          children: () => juris.getState("rows").map((item) => ({
+              Row: { key: item.id, item },
+          })),
+      },
+  });
+  // Through the proxy the same write reaches the row.
+  juris.setValue("rows.1.label", "Bread");
+  page.innerHTML; // → <ul><li>Milk</li><li>Bread</li></ul>
+  ```
+
 ### The component api
 
 The examples on this page share one instance, with three services, and its `api`, which is the
@@ -5793,6 +6298,78 @@ given === juris.api; // → true
     api.getState("cart.total"); // → 10
     ```
 
+- **`compute` with `watch`.** `compute(path, resolver, { watch })` adds paths tracking cannot see: what
+  the resolver reads with `peek`, or a wildcard, where `*` matches exactly one segment.
+
+  ```js
+  api.setValue("todos", [{ done: false }, { done: false }]);
+  const open = (todos) => todos.filter((todo) => !todo.done).length;
+  api.compute("todos.open", () => open(juris.peek("todos")), {
+      watch: ["todos.*.done"],
+  });
+  api.getState("todos.open"); // → 2
+  api.setValue("todos.0.done", true);
+  api.getState("todos.open"); // → 1
+  ```
+
+- **`bindState` in a body.** A `compute` made in a body is disposed with its component, and a
+  `bindState` is not: it keeps running after the component is gone. In a body, end it with the
+  component's own cleanup, as below.
+
+  ```js dom
+  api.setValue("cart.count", 1);
+  const seen = [];
+  juris.registerComponent("CartLog", (props, api) => {
+      api.bindState(
+          () => api.getState("cart.count"),
+          (count) => seen.push(count),
+      );
+      return { p: "Logged" };
+  });
+  const page = document.createElement("main");
+  api.render(page, { CartLog: {} });
+  api.disposeTree(page.firstChild);
+  api.setValue("cart.count", 2);
+  seen; // → [1, 2]
+  ```
+
+  ```js dom
+  api.setValue("cart.count", 1);
+  const seen = [];
+  juris.registerComponent("CartLog", (props, api) => {
+      const stop = api.bindState(
+          () => api.getState("cart.count"),
+          (count) => seen.push(count),
+      );
+      api.onCleanup(stop);
+      return { p: "Logged" };
+  });
+  const page = document.createElement("main");
+  api.render(page, { CartLog: {} });
+  api.disposeTree(page.firstChild);
+  api.setValue("cart.count", 2);
+  seen; // → [1]
+  ```
+
+  - On a server it outlives the render too, and every later request adds to it: a server's instance
+    is shared, so each render of that body leaves one more binding behind.
+
+    ```js
+    const shop = new Juris({ features: { ssr: SSRRenderer } });
+    const seen = [];
+    shop.registerComponent("CartLog", (props, api) => {
+        api.bindState(
+            () => api.getState("cart.count", 0),
+            (count) => seen.push(count),
+        );
+        return { p: "Logged" };
+    });
+    const state = (count) => ({ cart: { count } });
+    await shop.renderRequest({ layout: { CartLog: {} }, state: state(1) });
+    await shop.renderRequest({ layout: { p: "Hi" }, state: state(2) });
+    seen; // → [1, 2]
+    ```
+
 - **Local state.** `useState(key, initial)` answers `[get, set]` (see "Local state").
 
   ```js dom
@@ -5858,7 +6435,7 @@ given === juris.api; // → true
 
   - `live(path, name, ...args)` calls a live query, writes its answer at `path` and keeps it
     written as the server pushes changes; inside a component the subscription ends with the
-    component.
+    component. Several paths may watch one query, each with its own copy ("`remote-services.js`").
 
     ```js
     const stop = api.live("cart.count", "cartCount");
@@ -6212,6 +6789,18 @@ given === juris.api; // → true
   api.prop(undefined, 0); // → 0
   ```
 
+  - A ref is a frozen object: its `path` says where it points, which a component may read to write
+    back there, and `ref(path, default)` keeps the default as `defaultValue`.
+
+    ```js
+    const count = api.ref("cart.count", 0);
+    count.path; // → "cart.count"
+    count.defaultValue; // → 0
+    Object.isFrozen(count); // → true
+    api.setValue(count.path, 4);
+    api.prop(count); // → 4
+    ```
+
 - `isServer`, and `markRender(flag)` for a plugin that must tell a page cache a render is volatile.
 
   ```js
@@ -6393,6 +6982,100 @@ The instance's options, for a test or a page that builds its own:
   // throws Error: Juris: callCache is for a browser instance
   ```
 
+  - An element whose binding has waited longer than `pendingDelay` on a promise carries
+    `data-pending` until it settles, and `$async.slow` counts it, so a stylesheet can show a
+    spinner: `[data-pending] { opacity: 0.5 }`. The attribute lands one microtask after the count,
+    even at a delay of 0.
+
+    ```js dom
+    const juris = new Juris({ pendingDelay: 1 });
+    let answer;
+    const page = document.createElement("main");
+    juris.render(page, {
+        p: {
+            textContent: () => new Promise((resolve) => {
+                answer = resolve;
+            }),
+        },
+    });
+    page.innerHTML; // → <p></p>
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    page.innerHTML; // → <p data-pending=""></p>
+    juris.getState("$async.slow"); // → 1
+    answer("3 left");
+    await new Promise((resolve) => setTimeout(resolve));
+    page.innerHTML; // → <p>3 left</p>
+    juris.getState("$async.slow"); // → 0
+    ```
+
+    ```js dom
+    const juris = new Juris({ pendingDelay: 0 });
+    const page = document.createElement("main");
+    const waiting = () => new Promise(() => {});
+    juris.render(page, { p: { textContent: waiting } });
+    juris.getState("$async.slow"); // → 1
+    page.innerHTML; // → <p></p>
+    await Promise.resolve();
+    page.innerHTML; // → <p data-pending=""></p>
+    ```
+
+    - A seat or a component's root function has no element of its own, so it marks the parent element.
+
+      ```js dom
+      const juris = new Juris({ pendingDelay: 0 });
+      const waiting = () => {
+          juris.getState("cart.count");
+          return new Promise(() => {});
+      };
+      juris.registerComponent("Slow", () => waiting);
+      const page = document.createElement("main");
+      juris.render(page, {
+          div: {
+              children: [
+                  { section: { children: [waiting] } },
+                  { aside: { children: [{ Slow: {} }] } },
+              ],
+          },
+      });
+      await Promise.resolve();
+      page.innerHTML;
+      // → <div><section data-pending=""></section>
+      //   <aside data-pending=""></aside></div>
+      ```
+
+    - An adopted component's root function marks the element it adopted.
+
+      ```js dom
+      const juris = new Juris({ pendingDelay: 0 });
+      juris.registerComponent("Card", () => () => new Promise(() => {}));
+      const page = document.createElement("main");
+      document.body.appendChild(page);
+      page.innerHTML = '<div class="card"></div>';
+      juris.enhance(".card", { Card: {} });
+      await Promise.resolve();
+      page.innerHTML; // → <div class="card" data-pending=""></div>
+      ```
+
+    - A shadow root marks its host, and a plain fragment, which has no attributes, marks nothing.
+
+      ```js dom
+      const juris = new Juris({ pendingDelay: 0 });
+      juris.registerComponent("Slow", () => () => new Promise(() => {}));
+      const host = document.createElement("div");
+      juris.render(host.attachShadow({ mode: "open" }), { Slow: {} });
+      await Promise.resolve();
+      host.outerHTML; // → <div data-pending=""></div>
+      ```
+
+      ```js dom
+      const juris = new Juris({ pendingDelay: 0 });
+      juris.registerComponent("Slow", () => () => new Promise(() => {}));
+      const fragment = document.createDocumentFragment();
+      juris.render(fragment, { Slow: {} });
+      await Promise.resolve();
+      juris.getState("$async.slow"); // → 1
+      ```
+
   ```js dom
   let asked = 0;
   const browser = new Juris({
@@ -6549,6 +7232,32 @@ What an app calls on an instance:
   juris.api.greet("Ada"); // → "Hello, Ada"
   ```
 
+  - A plugin is a function, or an object with an `install(juris, options)` method, called with the
+    object as `this`. Anything else is refused.
+
+    ```js
+    const juris = new Juris();
+    const money = {
+        symbol: "€",
+        install() {
+            return { money: (n) => `${n} ${this.symbol}` };
+        },
+    };
+    juris.use(money);
+    juris.api.money(3); // → "3 €"
+    juris.use({});
+    // throws Error: Juris.use: plugin must be a function
+    ```
+
+- `layoutFromData(value, { components })`: a copy of a layout that came as data, with every
+  component left out unless listed ("Layouts from a database").
+
+  ```js
+  const juris = new Juris();
+  juris.layoutFromData({ ul: { children: [{ RefundButton: { order: 7 } }] } });
+  // → { ul: { children: [] } }
+  ```
+
 - `registerComponent`, `hasComponent`, `install`
 
   ```js
@@ -6659,6 +7368,996 @@ new Juris({ privatePaths: "session" });
 
 A nested name used to match no root, so what it named was serialised into the page as if it had
 never been given; nested private paths are refused, not supported.
+
+### `enhance`
+
+`juris.enhance(target, enhancer, options)` takes over elements already on the page: markup a server
+wrote, what another script drew, or, with `force`, what a layout drew. The element stays where it
+is, and takes the enhancer's properties, listeners and children as if a layout had drawn it. It
+answers a handle. It needs a `document`, so it runs in a browser; `api.enhance` is the same call.
+
+The examples on this page share one instance and one page, in the document:
+
+```js setup dom
+import Juris from "juris/juris.js";
+
+const juris = new Juris();
+const page = document.createElement("main");
+document.body.appendChild(page);
+
+// The stand-in page has no MutationObserver, so here is a small one.
+// settle() tells it what changed, as a browser does a moment after a write.
+const observers = new Set();
+globalThis.MutationObserver = class {
+    constructor(deliver) {
+        this.deliver = deliver;
+        observers.add(this);
+    }
+    observe(root) {
+        this.root = root;
+        this.seen = new Set(root.querySelectorAll("*"));
+    }
+    disconnect() {
+        observers.delete(this);
+    }
+    report() {
+        const now = new Set(this.root.querySelectorAll("*"));
+        const addedNodes = [...now].filter((node) => !this.seen.has(node));
+        const removedNodes = [...this.seen].filter((node) => !now.has(node));
+        this.seen = now;
+        this.deliver([{ addedNodes, removedNodes }]);
+    }
+};
+const settle = () => observers.forEach((observer) => observer.report());
+```
+
+```js
+page.innerHTML = '<button class="buy">Buy</button>';
+juris.setValue("cart.count", 0);
+const buy = page.querySelector(".buy");
+juris.enhance(buy, {
+    onclick: () => juris.updateState("cart.count", (count) => count + 1),
+});
+buy.click();
+juris.getState("cart.count"); // → 1
+page.querySelector(".buy") === buy; // → true
+```
+
+#### What `enhance` takes as a target
+
+- An element.
+
+  ```js
+  page.innerHTML = "<p>Milk</p>";
+  const milk = page.querySelector("p");
+  juris.enhance(milk, { title: "In stock" });
+  page.innerHTML; // → <p title="In stock">Milk</p>
+  ```
+
+- A list of elements: an array, a `NodeList`, or anything else that iterates.
+
+  ```js
+  page.innerHTML = "<p>Milk</p><p>Eggs</p>";
+  const rows = new Set(page.querySelectorAll("p"));
+  juris.enhance(rows, { title: "In stock" }).size; // → 2
+  ```
+
+- An id: a string that is the `id` of an element in the document.
+
+  ```js
+  page.innerHTML = '<p id="milk">Milk</p>';
+  juris.enhance("milk", { title: "In stock" }).size; // → 1
+  page.innerHTML; // → <p id="milk" title="In stock">Milk</p>
+  ```
+
+- Any other string is a CSS selector, read inside `within`. One that matches nothing answers an
+  empty handle, not an error.
+
+  ```js
+  page.innerHTML = '<p class="row">Milk</p><p class="row">Eggs</p>';
+  juris.enhance(".row", { title: "In stock" }).size; // → 2
+  juris.enhance(".sold-out", { title: "Gone" }).size; // → 0
+  ```
+
+- Anything else is refused.
+
+  ```js
+  juris.enhance(42, { title: "In stock" });
+  // throws Error: Juris.enhance: target must be an element, a list of elements,
+  //   an id, or a selector
+  ```
+
+#### What `enhance` takes as an enhancer
+
+- Layout content: what would go under a tag in a layout. A function value binds, as in any layout.
+
+  ```js
+  page.innerHTML = '<span class="count">0</span>';
+  juris.setValue("cart.count", 2);
+  juris.enhance(".count", {
+      className: "count full",
+      textContent: () => String(juris.getState("cart.count")),
+  });
+  page.innerHTML; // → <span class="count full">2</span>
+  juris.setValue("cart.count", 3);
+  page.innerHTML; // → <span class="count full">3</span>
+  ```
+
+- A `{ Component: props }` layout: the component takes the element as its root. Its root must be
+  the same tag, and an element.
+
+  ```js
+  juris.registerComponent("Stock", (props, api) => ({
+      p: { textContent: () => `${api.getState("left", props.left)} left` },
+  }));
+  page.innerHTML = "<p>12 left</p>";
+  const stock = page.querySelector("p");
+  juris.enhance(stock, { Stock: { left: 12 } });
+  juris.setValue("left", 11);
+  page.innerHTML; // → <p>11 left</p>
+  page.querySelector("p") === stock; // → true
+  ```
+
+  ```js
+  juris.registerComponent("Card", () => ({ div: "A card" }));
+  page.innerHTML = "<p>12 left</p>";
+  juris.enhance("p", { Card: {} });
+  // throws Error: Juris.enhance: component "Card" renders <div> but is adopting
+  //   <p>
+  ```
+
+- A function `(api) => either of those`. It runs once per element, like a component definition: it
+  is given the component api with `api.element` on it, so it can read what the markup says.
+
+  ```js
+  page.innerHTML = '<b data-path="cart.count">-</b>';
+  juris.setValue("cart.count", 2);
+  juris.enhance("[data-path]", ({ element, getState }) => {
+      const path = element.getAttribute("data-path");
+      return { textContent: () => String(getState(path)) };
+  });
+  page.innerHTML; // → <b data-path="cart.count">2</b>
+  ```
+
+- A function's `onCleanup` handlers run when the element is unenhanced, rebound or removed.
+
+  ```js
+  page.innerHTML = "<p>Milk</p>";
+  const log = [];
+  const milk = page.querySelector("p");
+  juris.enhance(milk, ({ onCleanup }) => {
+      onCleanup(() => log.push("timer stopped"));
+      return {};
+  });
+  juris.unenhance(milk);
+  log; // → ["timer stopped"]
+  ```
+
+- A `children` function takes over rows the server wrote: a row carrying `data-key` is the row of
+  that key, kept and moved as a keyed list's. The attribute holds text and a layout's key may be a
+  number, so `7` matches the row written as `"7"`, and the row takes the layout's key from then on.
+
+  ```js
+  page.innerHTML = [
+      '<ul><li data-key="7">Milk</li>',
+      '<li data-key="8">Eggs</li></ul>',
+  ].join("");
+  const [milk, eggs] = page.querySelectorAll("li");
+  const titles = { 7: "Milk", 8: "Eggs" };
+  juris.setValue("rows", [7, 8]);
+  juris.enhance("ul", {
+      children: () => juris.getState("rows").map((id) => ({
+          li: { key: id, textContent: titles[id] },
+      })),
+  });
+  page.querySelector("li") === milk; // → true
+  juris.setValue("rows", [8, 7]);
+  page.querySelector("li") === eggs; // → true
+  page.innerHTML;
+  // → <ul><li data-key="8">Eggs</li><li data-key="7">Milk</li></ul>
+  ```
+
+- When one element's enhancer or first draw throws, the elements before it in the call are undone,
+  and the error goes on with no handle answered.
+
+  ```js
+  page.innerHTML = '<p class="row" id="a"></p><p class="row" id="b"></p>';
+  const log = [];
+  const enhancer = ({ element, onCleanup }) => {
+      onCleanup(() => log.push(`undone ${element.id}`));
+      if (element.id === "b") throw new Error("no price for this row");
+      return {};
+  };
+  juris.enhance(".row", enhancer); // throws Error: no price for this row
+  log; // → ["undone b", "undone a"]
+  ```
+
+#### `enhance` options
+
+- `within`: the root a selector is read in and `observe` watches, the document unless given.
+
+  ```js
+  page.innerHTML = '<div id="a"><p>Milk</p></div><div id="b"><p>Eggs</p></div>';
+  const within = page.querySelector("#b");
+  juris.enhance("p", { title: "In stock" }, { within }).size; // → 1
+  page.innerHTML;
+  // → <div id="a"><p>Milk</p></div><div id="b"><p title="In stock">Eggs</p>
+  //   </div>
+  ```
+
+- `allowHtml`: permits `innerHTML` in what is drawn. Without it `innerHTML` throws, anywhere in the
+  enhancement, a child's included, even on an instance given `allowInnerHTML` ("Components and
+  layouts"). An enhanced element never takes HTML from state by accident.
+
+  ```js
+  page.innerHTML = '<p class="review"></p>';
+  juris.enhance(".review", { innerHTML: "<b>Great</b>" });
+  // throws Error: Juris.enhance: innerHTML is not allowed inside an enhanced
+  //   element
+  juris.enhance(".review", { innerHTML: "<b>Great</b>" }, { allowHtml: true });
+  page.innerHTML; // → <p class="review"><b>Great</b></p>
+  ```
+
+- `force`: allows enhancing inside what Juris drew. Without it such an element throws, since its
+  properties belong to the layout that drew it.
+
+  ```js
+  juris.render(page, { p: { className: "price", textContent: "3 €" } });
+  juris.enhance(".price", { title: "With tax" });
+  // throws Error: Juris.enhance: element is inside a Juris-rendered subtree
+  juris.enhance(".price", { title: "With tax" }, { force: true }).size; // → 1
+  page.innerHTML; // → <p class="price" title="With tax">3 €</p>
+  ```
+
+- `observe`: keeps watching `within`. A match added later is enhanced, one removed is disposed, and
+  the handle follows both.
+
+  ```js
+  page.innerHTML = "";
+  const options = { observe: true };
+  const handle = juris.enhance(".row", { title: "In stock" }, options);
+  handle.size; // → 0
+  page.innerHTML = '<p class="row">Milk</p>';
+  settle();
+  handle.size; // → 1
+  page.innerHTML; // → <p class="row" title="In stock">Milk</p>
+  page.innerHTML = "";
+  settle();
+  handle.size; // → 0
+  ```
+
+  - Additions need a selector: a target given as an element or a list has nothing to match against,
+    so only its removals are followed.
+
+    ```js
+    page.innerHTML = '<p class="row">Milk</p>';
+    const milk = page.querySelector("p");
+    const options = { observe: true };
+    const handle = juris.enhance(milk, { title: "In stock" }, options);
+    const eggs = page.appendChild(document.createElement("p"));
+    eggs.className = "row";
+    settle();
+    eggs.hasAttribute("title"); // → false
+    handle.size; // → 1
+    milk.remove();
+    settle();
+    handle.size; // → 0
+    ```
+
+  - Without `force`, a match inside what Juris drew throws, here from the observer, where nothing
+    catches it: a browser reports it as uncaught. Give both to watch what layouts draw.
+
+    ```js
+    page.innerHTML = "";
+    juris.enhance(".row", { title: "In stock" }, { observe: true });
+    juris.render(page, { p: { className: "row", textContent: "Milk" } });
+    settle();
+    // throws Error: Juris.enhance: element is inside a Juris-rendered subtree
+    ```
+
+- `dryRun`: answers what would match, and binds nothing.
+
+  ```js
+  page.innerHTML = '<p class="row">Milk</p>';
+  const handle = juris.enhance(".row", { title: "In stock" }, { dryRun: true });
+  handle.size; // → 1
+  page.innerHTML; // → <p class="row">Milk</p>
+  ```
+
+#### The `enhance` handle
+
+`enhance` answers `{ elements, size, has(element), disposed, dispose(), [Symbol.iterator] }`.
+
+- `elements` is what is enhanced now, `size` how many, `has(element)` whether one is, and the handle
+  iterates over them.
+
+  ```js
+  page.innerHTML = '<p class="row">Milk</p><p class="row">Eggs</p>';
+  const handle = juris.enhance(".row", { title: "In stock" });
+  handle.size; // → 2
+  handle.has(page.querySelector("p")); // → true
+  [...handle].map((row) => row.textContent); // → ["Milk", "Eggs"]
+  handle.disposed; // → false
+  ```
+
+- `dispose()` undoes every element and stops watching, whichever one's cleanup throws. Listeners
+  and bindings go; what they already wrote stays. It may be called twice.
+
+  ```js
+  page.innerHTML = "<button>0</button>";
+  juris.setValue("cart.count", 1);
+  let clicks = 0;
+  const handle = juris.enhance("button", {
+      onclick: () => {
+          clicks += 1;
+      },
+      textContent: () => String(juris.getState("cart.count")),
+  });
+  handle.dispose();
+  handle.disposed; // → true
+  handle.size; // → 0
+  juris.setValue("cart.count", 2);
+  page.querySelector("button").click();
+  page.innerHTML; // → <button>1</button>
+  clicks; // → 0
+  ```
+
+- `juris.unenhance(element)` undoes one element and leaves the others.
+
+  ```js
+  page.innerHTML = "<button>Add</button>";
+  let clicks = 0;
+  const add = page.querySelector("button");
+  const onclick = () => {
+      clicks += 1;
+  };
+  juris.enhance(add, { onclick });
+  add.click();
+  juris.unenhance(add);
+  add.click();
+  clicks; // → 1
+  ```
+
+#### Rebinding
+
+Enhancing an element twice rebinds it, and never stacks: what the first enhancement put on it goes,
+its cleanups run, and only the second is left.
+
+```js
+page.innerHTML = "<button>Buy</button>";
+const log = [];
+const buy = page.querySelector("button");
+juris.enhance(buy, ({ onCleanup }) => {
+    onCleanup(() => log.push("first is gone"));
+    return { onclick: () => log.push("first") };
+});
+juris.enhance(buy, { onclick: () => log.push("second") });
+buy.click();
+log; // → ["first is gone", "second"]
+```
+
+#### An enhanced element a layout draws again
+
+With `force`, an element Juris drew can be enhanced, and a layout can draw it again: a reconcile
+keeps an element of the same tag for the next layout. What `enhance` gave it goes with the rest,
+and then the enhancement follows the element (`redraw` and `enhanceRedrawn` in `dom-renderer.js`;
+the tests are at the end of `juris-tests/tests/juris/dom-renderer.enhance.test.mjs`).
+
+Here the layout is held in state, so `design(…)` swaps it and the elements are reused:
+
+```js setup
+const design = (...children) => juris.setValue("design", children);
+design({ b: { className: "price", textContent: "-" } });
+juris.setValue("cart", { total: "12 €", tax: "2 €" });
+juris.render(page, { main: { children: () => juris.getState("design") } });
+const element = page.querySelector("b");
+```
+
+- The enhancer runs again on what the element is now, so a marker that changed is read afresh, and
+  its cleanups run once.
+
+  ```js
+  design({ b: { className: "price", "data-path": "cart.total" } });
+  const log = [];
+  juris.enhance(".price", ({ element, getState, onCleanup }) => {
+      const path = element.getAttribute("data-path");
+      onCleanup(() => log.push(`left ${path}`));
+      return { textContent: () => String(getState(path)) };
+  }, { force: true });
+  element.textContent; // → "12 €"
+  design({ b: { className: "price", "data-path": "cart.tax" } });
+  page.querySelector("b") === element; // → true
+  element.textContent; // → "2 €"
+  juris.setValue("cart.tax", "3 €");
+  element.textContent; // → "3 €"
+  log; // → ["left cart.total"]
+  ```
+
+- An element that stops matching is let go: the handle no longer lists it, its cleanups run, and what
+  the layout drew stays. A marker the new layout leaves out goes, as anything a layout leaves out
+  does, so leaving it out is enough.
+
+  ```js
+  const log = [];
+  const handle = juris.enhance(".price", ({ onCleanup }) => {
+      onCleanup(() => log.push("let go"));
+      return { title: "With tax" };
+  }, { force: true });
+  handle.size; // → 1
+  design({ b: { className: "plain", textContent: "Free" } });
+  handle.size; // → 0
+  log; // → ["let go"]
+  page.innerHTML; // → <main><b class="plain">Free</b></main>
+  ```
+
+- An element that starts matching is taken by an enhancement that observes and has `force`, and only
+  inside its `within`. It answers at once, in the same draw.
+
+  ```js
+  const handle = juris.enhance(".sale", { title: "On sale" }, {
+      observe: true,
+      force: true,
+  });
+  handle.size; // → 0
+  design({ b: { className: "sale", textContent: "9 €" } });
+  handle.size; // → 1
+  page.querySelector("b") === element; // → true
+  page.innerHTML;
+  // → <main><b class="sale" title="On sale">9 €</b></main>
+  ```
+
+  ```js
+  const within = document.createElement("section");
+  const handle = juris.enhance(".sale", { title: "On sale" }, {
+      observe: true,
+      force: true,
+      within,
+  });
+  design({ b: { className: "sale", textContent: "9 €" } });
+  handle.size; // → 0
+  ```
+
+- An enhancement without `observe` follows the elements it holds, and takes no new one.
+
+  ```js
+  const options = { force: true };
+  const handle = juris.enhance(".price", { title: "With tax" }, options);
+  design(
+      { b: { className: "price" } },
+      { i: { className: "price" } },
+  );
+  handle.size; // → 1
+  page.querySelector("i").hasAttribute("title"); // → false
+  ```
+
+- After `dispose()` nothing follows: the next draw leaves the element to the layout.
+
+  ```js
+  let runs = 0;
+  const handle = juris.enhance(".price", () => {
+      runs += 1;
+      return {};
+  }, { force: true });
+  handle.dispose();
+  design({ b: { className: "price", textContent: "13 €" } });
+  runs; // → 1
+  ```
+
+### Layouts from a database
+
+A layout is plain data, so a page design can live in a database row. Reading one takes a line, and
+drawing one safely takes knowing what the framework refuses, what it does not, and how a stored
+layout gets its behaviour without holding a single function.
+
+The examples on this page share one instance, given the kit's string renderer, and `draw`, which
+does what an app does with a stored row: parse it, and render what comes out.
+
+```js setup
+import Juris from "juris/juris.js";
+import SSRRenderer from "juris-kit/server/ssr-renderer.js";
+
+const juris = new Juris({ features: { ssr: SSRRenderer } });
+const draw = (row) => juris.renderToString(JSON.parse(row));
+```
+
+#### A layout is plain data
+
+`JSON.parse` a stored row and draw it. The code that draws it needs no knowledge of its structure:
+two rows of different shapes go through the same line.
+
+```js
+draw('{"p":"Closed on Monday"}'); // → <p>Closed on Monday</p>
+draw('{"ul":{"children":[{"li":"Milk"},{"li":"Eggs"}]}}');
+// → <ul><li>Milk</li><li>Eggs</li></ul>
+```
+
+A page holds it the same way as any other value:
+
+```js
+juris.registerComponent("Notice", (props, api) => {
+    return { section: { children: [JSON.parse(props.row)] } };
+});
+juris.renderToString({ Notice: { row: '{"h2":"Closed on Monday"}' } });
+// → <section><h2>Closed on Monday</h2></section>
+```
+
+#### What is refused when drawn
+
+Whatever the data says, both renderers leave these out, in every layout (`html-safety.js`).
+
+- A `<script>`. What stands beside it is drawn.
+
+  ```js
+  draw('{"div":{"children":[{"script":"steal()"},{"p":"Hi"}]}}');
+  // → <div><p>Hi</p></div>
+  ```
+
+- An `<iframe>`.
+
+  ```js
+  draw('{"div":{"children":[{"iframe":{"src":"https://ads.example"}}]}}');
+  // → <div></div>
+  ```
+
+- A `<style>`.
+
+  ```js
+  draw('{"div":{"children":[{"style":"body{display:none}"}]}}');
+  // → <div></div>
+  ```
+
+- `javascript:` URLs. The element stays, without the attribute.
+
+  ```js
+  draw('{"a":{"href":"javascript:steal()","textContent":"Open"}}');
+  // → <a>Open</a>
+  ```
+
+- `innerHTML`.
+
+  ```js
+  draw('{"p":{"innerHTML":"<img src=x onerror=steal()>"}}'); // → <p></p>
+  ```
+
+- A tag name carrying attributes. It is no tag, so nothing is drawn.
+
+  ```js
+  draw('{"div":{"children":[{"img src=x onerror=steal()":{}}]}}');
+  // → <div></div>
+  ```
+
+- String `on…` handlers. A handler is a function, and JSON cannot hold one.
+
+  ```js
+  draw('{"button":{"onclick":"steal()","textContent":"Buy"}}');
+  // → <button>Buy</button>
+  ```
+
+An instance's own options lift these for every layout it draws, a stored one included, so an
+instance that draws stored layouts should not be given `allowTags` or `allowInnerHTML`.
+
+```js
+const widened = new Juris({
+    allowTags: ["iframe"],
+    features: { ssr: SSRRenderer },
+});
+widened.renderToString(JSON.parse('{"iframe":{"src":"https://ads.example"}}'));
+// → <iframe src="https://ads.example"></iframe>
+```
+
+#### What is not refused
+
+The rules above stop a layout from running code. They do not stop it from lying to the reader, so a
+layout written by people you do not trust is still dangerous. Draw such a layout only where the
+reader knows whose words they are looking at.
+
+- A full-page `position: fixed` overlay is an ordinary style. It covers your whole page with
+  whatever the row says.
+
+  ```js
+  draw(`{"div":{
+      "style":{"position":"fixed","inset":"0","background":"white"},
+      "textContent":"Your session ended."
+  }}`);
+  // → <div style="position:fixed;inset:0;background:white">Your session ended.
+  //   </div>
+  ```
+
+- A `<form>` posting to another site is an ordinary form. What a reader types into it goes there.
+
+  ```js
+  draw(`{"form":{
+      "action":"https://collect.example/",
+      "method":"post",
+      "children":[{"input":{"name":"password","type":"password"}}]
+  }}`);
+  // → <form action="https://collect.example/" method="post">
+  //   <input name="password" type="password"></form>
+  ```
+
+  A Content-Security-Policy with `form-action` helps here: the browser refuses to send such a form,
+  whatever drew it. The page's `headers` hook sets it.
+
+  ```js
+  import { createJurisServer } from "juris-kit/server/kernel.js";
+
+  const app = await createJurisServer({
+      root: new URL(".", import.meta.url),
+      build: "v1",
+      modules: { entry: "/src/client.js" },
+      layout: { RouterView: {} },
+      services: {},
+      routes: [{ path: "/", name: "home", component: "Home" }],
+      setup: (juris) => {
+          juris.registerComponent("Home", () => ({ p: "Hi" }));
+      },
+      page: {
+          headers: () => ({ "content-security-policy": "form-action 'self'" }),
+      },
+  });
+  const { url } = await app.listen();
+  const res = await fetch(`${url}/`);
+  res.headers.get("content-security-policy"); // → "form-action 'self'"
+  await app.close();
+  ```
+
+- A `style` that makes a browser fetch a URL is an ordinary value too ("CSS from data", under "Open").
+  It tells another site who read the page.
+
+  ```js
+  draw(`{"p":{"style":{"backgroundImage":"url(//tracker.example/seen.gif)"}}}`);
+  // → <p style="background-image:url(//tracker.example/seen.gif)"></p>
+  ```
+
+#### `layoutFromData`
+
+`juris.layoutFromData(value, { components })` answers a copy of a layout that came as data, with
+every component left out unless `components` lists it. Use it on any layout that is not written in
+your code: a database row, a request, anything JSON can hold. It belongs to the instance, not to
+`api`, so a component reaches it through the `juris` that `register(juris)` is given.
+
+Without it a row may name a component, and the component runs with the row as its props. No check
+when drawing can tell such a row from a layout written in code; this call can, because it is told
+which one it holds.
+
+```js
+juris.registerComponent("RefundButton", (props) => ({
+    button: `Refund order ${props.order}`,
+}));
+const row = JSON.parse(
+    '{"ul":{"children":[{"li":"Milk"},{"RefundButton":{"order":7}}]}}',
+);
+juris.renderToString(row);
+// → <ul><li>Milk</li><button>Refund order 7</button></ul>
+juris.renderToString(juris.layoutFromData(row));
+// → <ul><li>Milk</li></ul>
+```
+
+- `components` lists what the data may name. Those are kept, with their props.
+
+  ```js
+  juris.registerComponent("Badge", (props) => ({ b: props.text }));
+  const row = JSON.parse(
+      '{"div":{"children":[{"Badge":{"text":"New"}},{"RefundButton":{}}]}}',
+  );
+  const layout = juris.layoutFromData(row, { components: ["Badge"] });
+  layout; // → { div: { children: [{ Badge: { text: "New" } }] } }
+  juris.renderToString(layout); // → <div><b>New</b></div>
+  ```
+
+- It looks everywhere: in `children`, given as a list or as one object, and in the props of a
+  component it keeps, whichever prop holds it.
+
+  ```js
+  const row = JSON.parse('{"div":{"children":{"RefundButton":{"order":7}}}}');
+  juris.layoutFromData(row); // → { div: {} }
+  ```
+
+  ```js
+  const row = JSON.parse(
+      '{"Badge":{"text":"New","header":{"RefundButton":{"order":7}}}}',
+  );
+  juris.layoutFromData(row, { components: ["Badge"] });
+  // → { Badge: { text: "New" } }
+  ```
+
+- A capitalised name counts even before anything is registered under it, since a component may
+  arrive later, with a route's code. A component registered with a small letter counts too.
+
+  ```js
+  juris.layoutFromData(JSON.parse('{"div":{"children":[{"LaterOne":{}}]}}'));
+  // → { div: { children: [] } }
+  ```
+
+  ```js
+  juris.registerComponent("shipIt", () => ({ button: "Ship" }));
+  juris.layoutFromData(JSON.parse('{"div":{"children":[{"shipIt":{}}]}}'));
+  // → { div: { children: [] } }
+  ```
+
+- `Link`, `Await` and `RouterView` are components like any other: list them to keep them.
+
+  ```js
+  const row = JSON.parse('{"nav":{"children":[{"Link":{"to":"/orders"}}]}}');
+  juris.layoutFromData(row); // → { nav: { children: [] } }
+  juris.layoutFromData(row, { components: ["Link"] });
+  // → { nav: { children: [{ Link: { to: "/orders" } }] } }
+  ```
+
+- A whole layout that was a refused component answers `null`, which draws nothing.
+
+  ```js
+  const layout = juris.layoutFromData({ RefundButton: { order: 7 } });
+  layout; // → null
+  juris.renderToString({ main: { children: [layout] } }); // → <main></main>
+  ```
+
+- What it answers is a copy, and everything else stays as it was: a `style` object's keys are kept,
+  capitals included, and `__proto__` in the data reaches no prototype.
+
+  ```js
+  const row = JSON.parse('{"p":{"style":{"WebkitBoxFlex":"1"}}}');
+  const layout = juris.layoutFromData(row);
+  layout; // → { p: { style: { WebkitBoxFlex: "1" } } }
+  layout === row; // → false
+  ```
+
+  ```js
+  const row = JSON.parse('{"div":{"__proto__":{"polluted":true},"id":"a"}}');
+  const layout = juris.layoutFromData(row);
+  layout; // → { div: { id: "a" } }
+  layout.div.polluted; // → undefined
+  ```
+
+- Text, a number and `null` come back as they are.
+
+  ```js
+  juris.layoutFromData("Closed on Monday"); // → "Closed on Monday"
+  juris.layoutFromData(7); // → 7
+  juris.layoutFromData(null); // → null
+  ```
+
+- `components` must be a list of names.
+
+  ```js
+  juris.layoutFromData({ p: "Hi" }, { components: "Badge" });
+  // throws TypeError: Juris: components is a list of component names
+  ```
+
+- In `devMode` each one left out is said, through `refused` with the rule `"component-from-data"`.
+
+  ```js
+  const dev = new Juris({ devMode: true });
+  dev.layoutFromData({ RefundButton: {} });
+  // console.warn: Juris: dropped component "RefundButton" named in data
+  ```
+
+`layoutFromData` decides which components a row may name, and nothing else. What it leaves is drawn
+under the rules above, so an overlay or a form is still drawn. Its tests are
+`juris-tests/tests/juris/juris.layout-from-data.test.mjs`.
+
+```js
+const row = JSON.parse('{"form":{"action":"https://collect.example/"}}');
+juris.renderToString(juris.layoutFromData(row));
+// → <form action="https://collect.example/"></form>
+```
+
+#### Making a stored layout live with `enhance`
+
+JSON holds no function, so a stored layout has no binding and no listener of its own. It carries
+markers instead, in `data-` attributes, and the app says what each marker means, once, before any
+layout exists. [`enhance`](#enhance) is how: with `observe` it takes every element a later layout
+draws that has the marker.
+
+`settle()` below is what a browser does by itself a moment after a draw, here by hand, since the
+stand-in page these examples run on has no `MutationObserver`. The stock and the page come first:
+
+```js setup dom
+const observers = new Set();
+globalThis.MutationObserver = class {
+    constructor(deliver) {
+        this.deliver = deliver;
+        observers.add(this);
+    }
+    observe(root) {
+        this.root = root;
+    }
+    disconnect() {
+        observers.delete(this);
+    }
+};
+const settle = () => observers.forEach(({ deliver, root }) => {
+    const addedNodes = [...root.querySelectorAll("*")];
+    deliver([{ addedNodes, removedNodes: [] }]);
+});
+
+const page = document.createElement("main");
+document.body.appendChild(page);
+juris.setValue("stock", { milk: 12, eggs: 30 });
+```
+
+- Mark values with `data-state`: the layout names a path, and the enhancer binds the element to it.
+  One registration serves every layout there will ever be.
+
+  ```js
+  juris.enhance("[data-state]", ({ element, getState }) => ({
+      textContent: () => String(getState(element.getAttribute("data-state"))),
+  }), { observe: true, force: true });
+
+  juris.render(page, JSON.parse(`{"p":{"children":[
+      "Milk left: ",
+      {"b":{"data-state":"stock.milk","textContent":"..."}}
+  ]}}`));
+  settle();
+  page.innerHTML;
+  // → <p>Milk left: <b data-state="stock.milk">12</b></p>
+  juris.setValue("stock.milk", 11);
+  page.querySelector("b").textContent; // → "11"
+  ```
+
+- `{ observe: true, force: true }` are both needed. `observe` takes what is drawn later, and `force`
+  allows it: Juris drew these elements, and `enhance` throws on anything Juris drew without it.
+
+  ```js
+  juris.render(page, JSON.parse('{"b":{"data-state":"stock.milk"}}'));
+  juris.enhance("[data-state]", { title: "Live" });
+  // throws Error: Juris.enhance: element is inside a Juris-rendered subtree
+  ```
+
+- Mark actions with `data-action`, and look the name up in the app's own map. A layout can only name
+  what the map holds, and a name it does not hold does nothing. A `Map` has no inherited keys for a
+  layout to reach, as a plain object has.
+
+  ```js
+  const actions = new Map([
+      ["restock", () => juris.updateState("stock.milk", (count) => count + 6)],
+  ]);
+  juris.enhance("[data-action]", ({ element }) => ({
+      onclick: () => actions.get(element.getAttribute("data-action"))?.(),
+  }), { observe: true, force: true });
+
+  juris.render(page, JSON.parse(`{"div":{"children":[
+      {"button":{"data-action":"restock","textContent":"Restock"}},
+      {"button":{"data-action":"deleteAll","textContent":"Delete all"}}
+  ]}}`));
+  settle();
+  const [restock, unknown] = page.querySelectorAll("button");
+  restock.click();
+  juris.getState("stock.milk"); // → 18
+  unknown.click();
+  juris.getState("stock.milk"); // → 18
+  ```
+
+- In an app the registration goes in `hydrate`'s `beforeMount`: it runs in the browser alone, once,
+  before the first draw. What the server drew shows the row's own text until then.
+
+  ```js
+  import { hydrate } from "juris/client.js";
+
+  const state = {
+      $route: { path: "/" },
+      stock: { milk: 12 },
+      design: { b: { "data-state": "stock.milk", textContent: "..." } },
+  };
+  document.body.innerHTML = [
+      '<div id="app"><b data-state="stock.milk">...</b></div>',
+      '<script type="application/json" id="state">',
+      JSON.stringify(state),
+      "</script>",
+  ].join("");
+  const shop = await hydrate({
+      routes: [{ path: "/" }],
+      live: false,
+      beforeMount: (juris) => {
+          juris.enhance("[data-state]", ({ element, getState }) => ({
+              textContent: () => {
+                  return String(getState(element.getAttribute("data-state")));
+              },
+          }), { observe: true, force: true });
+      },
+      register: (juris) => {
+          juris.registerComponent("App", (props, api) => ({
+              main: {
+                  children: () => {
+                      return [juris.layoutFromData(api.getState("design"))];
+                  },
+              },
+          }));
+      },
+  });
+  settle();
+  document.getElementById("app").innerHTML;
+  // → <main><b data-state="stock.milk">12</b></main>
+  shop.setValue("stock.milk", 11);
+  document.querySelector("b").textContent; // → "11"
+  ```
+
+##### Checking the paths a layout names
+
+`enhance` reads whatever path the marker says, so the app must check which paths a layout may name.
+Left alone, `data-state="session.token"` displays the token to whoever reads the page:
+
+```js dom
+juris.setValue("session.token", "s3cret");
+juris.enhance("[data-state]", ({ element, getState }) => ({
+    textContent: () => String(getState(element.getAttribute("data-state"))),
+}), { observe: true, force: true });
+
+juris.render(page, JSON.parse('{"b":{"data-state":"session.token"}}'));
+settle();
+page.innerHTML; // → <b data-state="session.token">s3cret</b>
+```
+
+One line closes it: name the roots a layout may read, and answer nothing for the rest.
+
+```js dom
+const shown = (path) => path.startsWith("stock.");
+
+juris.setValue("session.token", "s3cret");
+juris.enhance("[data-state]", ({ element, getState }) => {
+    const path = element.getAttribute("data-state");
+    return { textContent: () => (shown(path) ? String(getState(path)) : "") };
+}, { observe: true, force: true });
+
+juris.render(page, JSON.parse(`{"p":{"children":[
+    {"b":{"data-state":"stock.eggs"}},
+    {"b":{"data-state":"session.token"}}
+]}}`));
+settle();
+page.innerHTML;
+// → <p><b data-state="stock.eggs">30</b><b data-state="session.token"></b></p>
+```
+
+##### A layout held in state
+
+A layout kept in state and read in a `children` function is drawn again when a new one is written.
+The reconcile reuses each element of the same tag, and enhancements follow the elements they hold:
+the enhancer runs again on what the element is now ("An enhanced element a layout draws again").
+
+```js dom
+juris.enhance("[data-state]", ({ element, getState }) => ({
+    textContent: () => String(getState(element.getAttribute("data-state"))),
+}), { observe: true, force: true });
+
+const stored = (path) => `{"b":{"data-state":"${path}"}}`;
+juris.setValue("design", JSON.parse(stored("stock.milk")));
+juris.render(page, {
+    main: {
+        children: () => [juris.layoutFromData(juris.getState("design"))],
+    },
+});
+settle();
+const shown = page.querySelector("b");
+shown.textContent; // → "12"
+
+juris.setValue("design", JSON.parse(stored("stock.eggs")));
+page.querySelector("b") === shown; // → true
+shown.textContent; // → "30"
+juris.setValue("stock.eggs", 29);
+shown.textContent; // → "29"
+juris.setValue("stock.milk", 11);
+shown.textContent; // → "29"
+```
+
+An element the new layout marks for the first time is taken as it is drawn, and one it marks with
+something else, or leaves unmarked, is let go.
+
+```js dom
+const handle = juris.enhance(".live", ({ getState }) => ({
+    textContent: () => String(getState("stock.milk")),
+}), { observe: true, force: true });
+
+juris.setValue("design", JSON.parse('{"b":{"className":"plain"}}'));
+juris.render(page, { main: { children: () => [juris.getState("design")] } });
+handle.size; // → 0
+
+juris.setValue("design", JSON.parse('{"b":{"className":"live"}}'));
+page.innerHTML; // → <main><b class="live">12</b></main>
+handle.size; // → 1
+
+juris.setValue("design", JSON.parse('{"b":{"className":"plain"}}'));
+handle.size; // → 0
+```
 
 ### Modules a browser downloads
 
@@ -7263,10 +8962,10 @@ new Juris({ features: { ssr: "ssr-renderer.js" } });
 
 - **Refusals.** `refused(rule, reason, detail)` is what both renderers call, inside their `devMode`
   checks, for each thing they leave out of a page: `rule` is a code a program matches
-  (`"layout-in-value"`, or the one `html-safety.js` answers beside its reason, which it does not yet:
-  "Not yet"), `reason` the words, and `detail` `{ name, value, node, component }` (the tag, attribute
-  or style key, the value refused, the node it was on in the DOM renderer, the component whose layout
-  it was in).
+  (`"layout-in-value"`, `"async-definition"`, `"keyed-list"`, `"component-from-data"`, or the one
+  `html-safety.js` answers beside its reason, which it does not yet: "Not yet"), `reason` the words,
+  and `detail` `{ name, value, node, component }` (the tag, attribute or style key, the value refused,
+  the node it was on in the DOM renderer, the component whose layout it was in).
 
   ```js
   const juris = new Juris({ devMode: true, features: { ssr: SSRRenderer } });
@@ -7293,6 +8992,38 @@ new Juris({ features: { ssr: "ssr-renderer.js" } });
   });
   kept; // → [{ rule: undefined, name: "href", node: "a" }]
   ```
+
+  - `"async-definition"`: a definition returned a promise ("Components and layouts"). `name` is the
+    component.
+
+    ```js
+    const juris = new Juris({ devMode: true, features: { ssr: SSRRenderer } });
+    const kept = [];
+    juris.refused = (rule, reason, { name }) => kept.push({ rule, name });
+    juris.registerComponent("Orders", async () => ({ p: "Orders" }));
+    juris.renderToString({ Orders: {} }); // → ""
+    kept; // → [{ rule: "async-definition", name: "Orders" }]
+    ```
+
+  - `"keyed-list"`: a list with keys that cannot use them ("Lists"). `name` is `"key"`, `value` the key
+    on two rows, and `node` what holds the rows.
+
+    ```js dom
+    const juris = new Juris({ devMode: true });
+    const kept = [];
+    juris.refused = (rule, reason, { value, node }) => {
+        kept.push({ rule, value, node: node.localName });
+    };
+    juris.setValue("rows", ["Milk", "Milk"]);
+    juris.render(document.createElement("main"), {
+        ul: {
+            children: () => juris.getState("rows").map((title) => ({
+                li: { key: title, textContent: title },
+            })),
+        },
+    });
+    kept; // → [{ rule: "keyed-list", value: "Milk", node: "ul" }]
+    ```
 
   - It writes the console line the renderers wrote before it: `Juris: dropped <reason>`, or, for an
     object given where text goes (a layout, a list, or any other object), `Juris: <reason>;
@@ -7900,8 +9631,8 @@ const juris = new Juris();
 const page = document.createElement("main");
 ```
 
-The browser renderer: bindings, keyed lists, the reuse of server-rendered elements, and `enhance`,
-which adopts markup Juris did not draw. `Juris` constructs it.
+The browser renderer: bindings, keyed lists, the reuse of server-rendered elements, and
+[`enhance`](#enhance), which adopts markup Juris did not draw. `Juris` constructs it.
 
 ```js
 import DOMRenderer from "juris/dom-renderer.js";
@@ -8079,7 +9810,8 @@ it no longer names is cleared, and so is what the element held inside, its child
 the layout puts nothing in their place: it gives no `children` (or `null`), no `textContent` and no
 allowed `innerHTML`, or it is an `<output>` or a `<textarea>` that holds its `value` (F27). So a
 placeholder such as `cond ? { span: { className: "badge", children: […] } } : { span: {} }` is an
-empty span when `cond` turns false, not a span that still shows the old text without its class.
+empty span when `cond` turns false, not a span that still shows the old text without its class. An
+enhanced element is no exception: what the layout and the enhancer gave it goes the same way.
 
 ```js
 juris.setValue("cart.count", 2);
@@ -8927,6 +10659,33 @@ juris.api.canForward(); // → true
   made; // → ["7"]
   ```
 
+  - That is a route with no `props` function. A `props` function reads the params, so a change of
+    params makes new props, and the page is made anew in the same element: its cleanups run and its
+    body runs again.
+
+    ```js dom
+    const juris = new Juris();
+    const made = [];
+    juris.registerComponent("OrderPage", (props, api) => {
+        made.push(props.id);
+        api.onCleanup(() => made.push("gone"));
+        return { h1: `Order ${props.id}` };
+    });
+    juris.use(createRouter({
+        routes: [{
+            path: "/orders/:id",
+            component: "OrderPage",
+            props: (params) => ({ id: params.id }),
+        }],
+    }));
+    await juris.api.navigate("/orders/7");
+    const page = document.createElement("main");
+    juris.render(page, { RouterView: {} });
+    await juris.api.navigate("/orders/8");
+    page.innerHTML; // → <h1>Order 8</h1>
+    made; // → ["7", "gone", "8"]
+    ```
+
 - In hash mode the route is compared with the address's fragment alone, so navigating to where the
   tab already is pushes no entry.
 
@@ -8949,6 +10708,107 @@ juris.api.canForward(); // → true
   ROUTER_COMPONENTS; // → ["RouterView", "Link"]
   ROUTER_COMPONENTS.every((name) => juris.hasComponent(name)); // → true
   ```
+
+- `RouterView` draws the record matched at `depth`, 0 (the top) unless given: a page with child routes
+  draws its child with `{ RouterView: { depth: 1 } }`. `fallback` is the layout drawn when nothing
+  matched at that depth.
+
+  ```js dom
+  const juris = new Juris();
+  juris.registerComponent("Orders", () => ({
+      section: {
+          children: [
+              { h1: "Orders" },
+              { RouterView: { depth: 1, fallback: { p: "Pick an order." } } },
+          ],
+      },
+  }));
+  juris.registerComponent("Order", (props, api) => ({
+      p: `Order ${api.getState("$route.params.id")}`,
+  }));
+  juris.use(createRouter({
+      routes: [{
+          path: "/orders",
+          component: "Orders",
+          children: [{ path: ":id", component: "Order" }],
+      }],
+  }));
+  await juris.api.navigate("/orders");
+  const page = document.createElement("main");
+  juris.render(page, { RouterView: {} });
+  page.innerHTML; // → <section><h1>Orders</h1><p>Pick an order.</p></section>
+  await juris.api.navigate("/orders/7");
+  page.innerHTML; // → <section><h1>Orders</h1><p>Order 7</p></section>
+  ```
+
+- `Link` takes `to` and draws an `a`. Its other props:
+
+  The examples below draw into this page, at `/orders/7`:
+
+  ```js setup dom
+  const juris = new Juris();
+  juris.use(createRouter({
+      routes: [{ path: "/" }, { path: "/orders" }, { path: "/orders/:id" }],
+  }));
+  await juris.api.navigate("/orders/7");
+  const page = document.createElement("main");
+  const link = (props) => {
+      juris.render(page, { Link: props });
+      return page.lastChild;
+  };
+  ```
+
+  - `exact`: active on that path alone. Without it a link is also active on any path under it.
+
+    ```js dom
+    link({ to: "/orders", textContent: "Orders" }).outerHTML;
+    // → <a href="/orders" class="active">Orders</a>
+    link({ to: "/orders", exact: true, textContent: "Orders" }).outerHTML;
+    // → <a href="/orders">Orders</a>
+    ```
+
+  - `activeClass`: the class an active link takes, `active` unless given.
+
+    ```js dom
+    const order = { to: "/orders/7", textContent: "Order" };
+    link({ ...order, activeClass: "here" }).outerHTML;
+    // → <a href="/orders/7" class="here">Order</a>
+    ```
+
+  - `replace`: a click replaces the tab's entry, where it would push one.
+
+    ```js dom
+    const before = history.length;
+    link({ to: "/", replace: true, textContent: "Home" }).click();
+    await new Promise((resolve) => setTimeout(resolve));
+    location.pathname; // → "/"
+    history.length === before; // → true
+    ```
+
+  - `onclick`: a handler of your own runs first, then the navigation, unless it called
+    `preventDefault()`.
+
+    ```js dom
+    const clicks = [];
+    const onclick = () => clicks.push("counted");
+    link({ to: "/orders", onclick, textContent: "Orders" }).click();
+    await new Promise((resolve) => setTimeout(resolve));
+    clicks; // → ["counted"]
+    location.pathname; // → "/orders"
+    ```
+
+    ```js dom
+    const stay = (event) => event.preventDefault();
+    link({ to: "/orders", onclick: stay, textContent: "Orders" }).click();
+    await new Promise((resolve) => setTimeout(resolve));
+    location.pathname; // → "/orders/7"
+    ```
+
+  - Anything else goes on the `a`.
+
+    ```js dom
+    link({ to: "/orders", id: "orders", children: "Orders" }).id; // → "orders"
+    ```
 
 #### `forms.js`
 
@@ -8973,8 +10833,8 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 Form state, validation and submit. `juris.use(forms())` adds `api.form(path, options)`;
 `createForm(juris, path, options)` is the same without the plugin. The options are `fields`
-(initial values), `validate` (a rule per field), `submit` (the service's name), `onSuccess` and
-`onError`; the form keeps `values`, `touched`, `errors`, `valid`, `dirty`, `submitted`,
+(initial values), `validate` (a rule per field), `submit` (the service's name, or a function),
+`onSuccess` and `onError`; the form keeps `values`, `touched`, `errors`, `valid`, `dirty`, `submitted`,
 `submitting`, `error` and `serverErrors` under its path.
 
 ```js
@@ -9277,6 +11137,146 @@ errors; // → [400]
     juris.getState("cart.submitting"); // → false
     juris.getState("cart.error");
     // → "The request took too long; it may or may not have been applied."
+    ```
+
+- `submit` may be a function `(values, form)`, for a form that does not end in one service call. It
+  is treated as the service would be: what it answers is the result, and what it throws is the error.
+
+  ```js
+  const juris = new Juris();
+  const note = createForm(juris, "note", {
+      fields: { text: "Back at 3" },
+      submit: async (values) => ({ saved: values.text }),
+  });
+  await note.submit(); // → { saved: "Back at 3" }
+  ```
+
+  ```js
+  const juris = new Juris();
+  const note = createForm(juris, "note", {
+      fields: { text: "" },
+      submit: async () => {
+          throw new Error("The disk is full.");
+      },
+  });
+  await note.submit(); // → undefined
+  juris.getState("note.error"); // → "The disk is full."
+  ```
+
+- `form.props(extra)` gives the `<form>` element its props: `onsubmit` (which stops the page load
+  and submits), `novalidate`, and `method: "post"`, so a native submit, before the script arrives,
+  never puts the fields in the URL. What `extra` gives is merged in.
+
+  ```js dom
+  const juris = new Juris();
+  juris.use(forms());
+  const signIn = juris.api.form("signIn", { fields: { email: "" } });
+  const page = document.createElement("main");
+  juris.render(page, {
+      form: {
+          ...signIn.props({ action: "/api/signIn" }),
+          children: [{ input: signIn.field("email", { type: "email" }) }],
+      },
+  });
+  page.innerHTML;
+  // → <form novalidate="" method="post" action="/api/signIn">
+  //   <input name="email" type="email"></form>
+  ```
+
+- `form.touch(name)` marks a field as seen, as leaving it does (`onblur`): a field's message shows
+  once it is touched, or once the form was submitted.
+
+  ```js
+  const juris = new Juris();
+  const signIn = createForm(juris, "signIn", {
+      fields: { email: "" },
+      validate: { email: (value) => (value ? null : "Enter an email.") },
+  });
+  signIn.error("email"); // → null
+  signIn.touch("email");
+  signIn.error("email"); // → "Enter an email."
+  ```
+
+- `form.field(name, { type: "radio", value })` is one radio of a group: it keeps its `value`, is
+  checked while the field holds that value, and a change writes the given value.
+
+  ```js dom
+  const juris = new Juris();
+  juris.use(forms());
+  const order = juris.api.form("order", { fields: { size: "small" } });
+  const radio = (value) => ({
+      input: order.field("size", { type: "radio", value }),
+  });
+  const page = document.createElement("main");
+  juris.render(page, { div: { children: [radio("small"), radio("large")] } });
+  const [small, large] = page.querySelectorAll("input");
+  [small.value, large.value]; // → ["small", "large"]
+  [small.checked, large.checked]; // → [true, false]
+  large.checked = true;
+  large.dispatchEvent(new Event("change"));
+  order.values(); // → { size: "large" }
+  [small.checked, large.checked]; // → [false, true]
+  ```
+
+  - They are compared as text, so a field holding `"2"` checks the radio of `2`, and what a change
+    writes is the value as given, a number staying a number.
+
+    ```js dom
+    const juris = new Juris();
+    juris.use(forms());
+    const cart = juris.api.form("cart", { fields: { count: "2" } });
+    const page = document.createElement("main");
+    juris.render(page, {
+        input: cart.field("count", { type: "radio", value: 2 }),
+    });
+    const two = page.querySelector("input");
+    two.checked; // → true
+    two.dispatchEvent(new Event("change"));
+    cart.values(); // → { count: 2 }
+    ```
+
+  - With no `value` it stands for `"on"`, as a browser's radio does.
+
+    ```js dom
+    const juris = new Juris();
+    juris.use(forms());
+    const terms = juris.api.form("terms", { fields: { agreed: "" } });
+    const page = document.createElement("main");
+    juris.render(page, {
+        input: terms.field("agreed", { type: "radio" }),
+    });
+    const agreed = page.querySelector("input");
+    agreed.checked; // → false
+    agreed.dispatchEvent(new Event("change"));
+    terms.values(); // → { agreed: "on" }
+    agreed.checked; // → true
+    ```
+
+- A form's state outlives its form object: it is state under the path, and `dispose()` ends the
+  rules, not the values. A form made later on that path finds what is there and keeps it, whatever
+  its `fields` say, so a component's form that is drawn again still holds what was typed.
+
+  ```js
+  const juris = new Juris();
+  const first = createForm(juris, "note", { fields: { text: "" } });
+  first.set("text", "Draft");
+  first.dispose();
+  juris.getState("note.values"); // → { text: "Draft" }
+  const second = createForm(juris, "note", { fields: { text: "Hello" } });
+  second.values(); // → { text: "Draft" }
+  ```
+
+  - `reset()` goes back to this object's `fields`. To start over from nothing, delete the path
+    before making the form.
+
+    ```js
+    const juris = new Juris();
+    const first = createForm(juris, "note", { fields: { text: "" } });
+    first.set("text", "Draft");
+    first.dispose();
+    juris.deleteState("note");
+    const second = createForm(juris, "note", { fields: { text: "Hello" } });
+    second.values(); // → { text: "Hello" }
     ```
 
 #### `remote-services.js`
@@ -9746,6 +11746,107 @@ server.close();
   juris.api.liveState("orders"); // → "pending"
   ```
 
+  - A path that joins a query already answered takes a copy of the answer at once, with its sibling's
+    status and message: the server answers a key once per client, and after that sends only what
+    changed. A later change reaches both paths whole
+    (`juris-tests/tests/juris/remote-services.sse.test.mjs`).
+
+    ```js
+    const juris = new Juris();
+    juris.use(sseClient({ EventSourceImpl: TestStream }));
+    juris.api.live("milk", "stock", "milk");
+    const stream = TestStream.last;
+    stream.emit("hello", { client: "tab-1" });
+    await tick();
+    const key = 'stock:["milk"]';
+    stream.emit("patch", { key, full: { count: 12, aisle: 3 } });
+    juris.api.live("alsoMilk", "stock", "milk");
+    juris.api.liveState("alsoMilk"); // → "live"
+    juris.getState("alsoMilk"); // → { count: 12, aisle: 3 }
+    stream.emit("patch", { key, set: [["count", 11]] });
+    juris.getState("milk"); // → { count: 11, aisle: 3 }
+    juris.getState("alsoMilk"); // → { count: 11, aisle: 3 }
+    posted.length; // → 1
+    ```
+
+  - It is a copy, so a write at one path does not reach the other.
+
+    ```js
+    const juris = new Juris();
+    juris.use(sseClient({ EventSourceImpl: TestStream }));
+    juris.api.live("milk", "stock", "milk");
+    TestStream.last.emit("hello", { client: "tab-1" });
+    await tick();
+    const full = { count: 12 };
+    TestStream.last.emit("patch", { key: 'stock:["milk"]', full });
+    juris.api.live("alsoMilk", "stock", "milk");
+    juris.setValue("alsoMilk.count", 0);
+    juris.getState("milk.count"); // → 12
+    ```
+
+  - A query that has failed since gives its last answer, and the path is `"failed"` with its message;
+    with the stream down, it is `"offline"`.
+
+    ```js
+    const juris = new Juris();
+    juris.use(sseClient({ EventSourceImpl: TestStream }));
+    juris.api.live("orders", "orders");
+    const stream = TestStream.last;
+    stream.emit("hello", { client: "tab-1" });
+    await tick();
+    stream.emit("patch", { key: "orders:[]", full: [{ id: 7 }] });
+    stream.emit("patch", { key: "orders:[]", error: "the database is down" });
+    // console.error: Juris live query "orders" failed on the server:
+    juris.api.live("latest", "orders");
+    juris.getState("latest"); // → [{ id: 7 }]
+    juris.api.liveState("latest"); // → "failed"
+    juris.api.liveMessage("latest"); // → "the database is down"
+    ```
+
+    ```js
+    const juris = new Juris();
+    juris.use(sseClient({ EventSourceImpl: TestStream }));
+    juris.api.live("orders", "orders");
+    const stream = TestStream.last;
+    stream.emit("hello", { client: "tab-1" });
+    await tick();
+    stream.emit("patch", { key: "orders:[]", full: [{ id: 7 }] });
+    stream.emit("error");
+    juris.api.live("latest", "orders");
+    juris.getState("latest"); // → [{ id: 7 }]
+    juris.api.liveState("latest"); // → "offline"
+    ```
+
+  - A path that joins before the first answer waits with the others, and both get it.
+
+    ```js
+    const juris = new Juris();
+    juris.use(sseClient({ EventSourceImpl: TestStream }));
+    juris.api.live("orders", "orders");
+    juris.api.live("latest", "orders");
+    juris.api.liveState("latest"); // → "pending"
+    const stream = TestStream.last;
+    stream.emit("hello", { client: "tab-1" });
+    await tick();
+    stream.emit("patch", { key: "orders:[]", full: [{ id: 7 }] });
+    juris.api.liveState("latest"); // → "live"
+    juris.getState("latest"); // → [{ id: 7 }]
+    ```
+
+  - The same path subscribed again keeps the status it has.
+
+    ```js
+    const juris = new Juris();
+    juris.use(sseClient({ EventSourceImpl: TestStream }));
+    juris.api.live("orders", "orders");
+    const stream = TestStream.last;
+    stream.emit("hello", { client: "tab-1" });
+    await tick();
+    stream.emit("patch", { key: "orders:[]", full: [{ id: 7 }] });
+    juris.api.live("orders", "orders");
+    juris.api.liveState("orders"); // → "live"
+    ```
+
 - A page put in the browser's back/forward cache gives its stream back on its `pagehide`, whatever
   the options: a cached page used to keep its stream open (Chrome keeps it), a browser keeps six
   connections to a host over HTTP/1.1, and after about six pages the next one waited for a
@@ -9869,7 +11970,7 @@ server.close();
   juris.api.live("orders", "orders");
   const old = TestStream.last;
   old.emit("hello", { client: "tab-1" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 100));
   TestStream.last === old; // → false
   ```
 
@@ -10373,6 +12474,83 @@ steps; // → ["plugins", "register", "load", "beforeMount", "mount"]
    juris.api.preloaded("price", "milk"); // → undefined
    ```
 
+   The markup is replaced, and not attached to, so that a page in a browser is drawn one way, whether
+   a server drew it first or not: every element on it is one Juris made, with its listeners and
+   function values in place, and nothing has to match the server's markup element by element. The
+   state is the server's, so the same layout draws the same page.
+
+   ```js dom
+   serverPage(
+       { $route: { path: "/cart" } },
+       { markup: "<button>Buy</button>" },
+   );
+   const served = document.querySelector("button");
+   let clicks = 0;
+   const onclick = () => {
+       clicks += 1;
+   };
+   await hydrate({
+       routes,
+       root: { button: { onclick, textContent: "Buy" } },
+   });
+   document.querySelector("button") === served; // → false
+   document.querySelector("button").click();
+   clicks; // → 1
+   ```
+
+   The new page is built first, while the old one is on screen, and the two change places in one
+   step, so a browser has no moment in which to paint an empty `#app`.
+
+   ```js dom
+   serverPage(
+       { $route: { path: "/cart" } },
+       { markup: "<p>From the server</p>" },
+   );
+   const shown = () => document.getElementById("app").innerHTML;
+   let during;
+   await hydrate({
+       routes,
+       register(juris) {
+           juris.registerComponent("App", () => {
+               during = shown();
+               return { p: "From the browser" };
+           });
+       },
+   });
+   during; // → <p>From the server</p>
+   shown(); // → <p>From the browser</p>
+   ```
+
+   What it costs: a second draw, and what the reader did before the boot goes with the old elements.
+   Text typed into an input is lost, and so is the focus.
+
+   ```js dom
+   serverPage({ $route: { path: "/cart" } }, { markup: '<input name="note">' });
+   document.querySelector("input").value = "No onions";
+   await hydrate({ routes, root: { input: { name: "note" } } });
+   document.querySelector("input").value; // → ""
+   ```
+
+   `beforeMount` is the fix: it runs while the old page is still there, so it can carry the text
+   across, into the state the first draw reads.
+
+   ```js dom
+   serverPage({ $route: { path: "/cart" } }, { markup: '<input name="note">' });
+   document.querySelector("input").value = "No onions";
+   await hydrate({
+       routes,
+       beforeMount(juris) {
+           juris.setValue("note", document.querySelector("input").value);
+       },
+       register(juris) {
+           juris.registerComponent("App", (props, api) => ({
+               input: { name: "note", value: api.getState("note") },
+           }));
+       },
+   });
+   document.querySelector("input").value; // → "No onions"
+   ```
+
 9. the title, bound to `document.title` and re-run when what it reads changes (the server's title
    stands when there is none): `title` is `{ fallback, suffix, max, decorate(text, juris) }`, the
    kernel's options, for the page's name as the server gave it (the router's `titleOf` on the
@@ -10489,6 +12667,29 @@ steps; // → ["plugins", "register", "load", "beforeMount", "mount"]
     registered; // → ["/sw.js"]
     post({ kind: "update-ready" });
     notes; // → ["update-ready"]
+    ```
+
+    A `register()` that fails is swallowed, and says nothing, in `devMode` or not: the page works
+    without a worker, so it is no failure of the page's. An app that must know registers it itself.
+
+    ```js dom
+    let asked = 0;
+    navigator.serviceWorker = {
+        register: async () => {
+            asked += 1;
+            throw new Error("the script is not there");
+        },
+        addEventListener: () => {},
+    };
+    serverPage({ $route: { path: "/cart" } });
+    await hydrate({
+        routes,
+        serviceWorker: "/sw.js",
+        register: app({ p: "Your cart" }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    asked; // → 1
+    document.getElementById("app").innerHTML; // → <p>Your cart</p>
     ```
 
 and last the instance under the global name `expose`, when given.
@@ -11908,8 +14109,8 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   of 500 rows, each a component with three bindings, and 300 seats (1,800 bindings, 500 instances),
   on the stand-in DOM, against devMode on without the feature; the numbers below are its medians,
   with the spread of three runs on Node 24.11 (2026-11-05), as "What it costs" records the module
-  bytes. The budget is checked in Chrome on a large real app's object list as well, before a
-  release.
+  bytes. The budget is checked in Chrome as well, before a release, on a page with about 500
+  component instances and 1,800 bindings.
 
   ```js dom
   const shop = new Juris();
@@ -13693,6 +15894,55 @@ await server.close();
   //   here counts its callers
   ```
 
+  - Behind a proxy, a dispatcher the app built says the same thing itself, with `live.clientKey`
+    and `clientIp`.
+
+    ```js
+    import {
+        serviceDispatcher,
+    } from "juris-kit/server/service-dispatcher.js";
+    import { clientIp } from "juris-kit/server/http.js";
+
+    const clientKey = (req, owner) => {
+        return owner ?? `ip:${clientIp(req, { trustProxy: { hops: 1 } })}`;
+    };
+    const api = serviceDispatcher(app.services, "/api", {
+        live: {
+            queries: ["todos"],
+            public: true,
+            maxStreamsPerCaller: 1,
+            clientKey,
+        },
+    });
+    const stream = (url, address) =>
+        fetch(`${url}/api/events`, { headers: { "x-forwarded-for": address } });
+    await served({ api }, async (url) => {
+        (await stream(url, "203.0.113.7")).status; // → 200
+        (await stream(url, "198.51.100.4")).status; // → 200
+        (await stream(url, "203.0.113.7")).status; // → 429
+    });
+    ```
+
+  - The server answers `invalidate`, and not `invalidateAccess`. An app that must take live access
+    away at once (a sign-out) builds the dispatcher, keeps it, and gives it as `api`, so it counts
+    its own callers, as above.
+
+    ```js
+    import {
+        serviceDispatcher,
+    } from "juris-kit/server/service-dispatcher.js";
+
+    const live = { queries: ["todos"], authorize: () => true };
+    const server = await createJurisServer({ ...app, api: { live } });
+    server.invalidateAccess; // → undefined
+    await server.close();
+
+    const api = serviceDispatcher(app.services, "/api", { live });
+    await served({ api }, async () => {
+        await api.invalidateAccess("ada"); // → 0
+    });
+    ```
+
 - A cluster worker is refused beside live queries (a handler the app built is taken to serve them)
   unless `allowWorkers` says otherwise, as `startProcess`'s `allow` would.
 
@@ -13799,6 +16049,32 @@ await server.close();
         await health.json();
         // → { ok: true, instance: "web-1", build: "v1", todos: 2 }
     });
+    ```
+
+  - `onError(error, where)` is told what no caller is waiting to hear, and `where` says which part
+    failed: `api <name>` for a service or the dispatcher's own (`api live.bus.publish`),
+    `preload <name>` for a call a render preloaded, `request` for what threw in the handling of a
+    request (the fixed 500), `job <name>`, `healthz`, `shutdown` and `regenerate` (a stale page's
+    replacement).
+
+    ```js
+    const told = [];
+    const down = async () => {
+        throw new Error("the database is down");
+    };
+    const config = {
+        services: { ...app.services, todos: down },
+        onError: (error, where) => told.push(where),
+    };
+    await served(config, async (url) => {
+        await fetch(`${url}/`);
+        await fetch(`${url}/api/todos`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "[]",
+        });
+    });
+    told; // → ["preload todos", "request", "api todos"]
     ```
 
   - An option that is not one of these is refused,
@@ -15919,6 +18195,36 @@ serviceDispatcher(services, "/api", { expose: ["todos"] }).names; // → ["todos
     typeof live({ maxGroups: null }); // → "function"
     ```
 
+  - A `touches` entry is a list of targets, or a function `(...args, result) => targets`, sync or
+    async: it is given the service's arguments, then what the service answered, with the request's
+    context as `this`, so a change wakes only what it changed.
+
+    ```js
+    const heard = [];
+    const handler = serviceDispatcher(services, "/api", {
+        context: (req) => ({ viewer: req.headers["x-user"] }),
+        live: {
+            queries: ["todos"],
+            public: true,
+            touches: {
+                addTodo(list, title, count) {
+                    heard.push({ list, title, count, viewer: this.viewer });
+                    return [{ name: "todos", args: [list] }];
+                },
+            },
+        },
+    });
+    await served(handler, async (api) => {
+        const stream = await openStream(api);
+        await subscribe(api, stream.client, "todos", ["work"]);
+        await stream.next();
+        await post(api, "addTodo", ["work", "Call"], { "x-user": "ada" });
+        (await stream.next()).set; // → [["", ["Report", "Call"]]]
+    });
+    heard;
+    // → [{ list: "work", title: "Call", count: 2, viewer: "ada" }]
+    ```
+
 - **The bus.** A mutation's invalidation publishes to `live.bus` beside its local re-runs, not
   before them: a slow or hung pool does not delay this instance's own updates (a failed publish goes
   to `onError`, `live.bus.publish`, and `handler.invalidate` resolves once both are done).
@@ -16036,6 +18342,70 @@ serviceDispatcher(services, "/api", { expose: ["todos"] }).names; // → ["todos
   runs; // → 2
   errors[0]; // → "stock: Do not know how to serialize a BigInt"
   ```
+
+- **A live query may answer objects it keeps and changes in place.** The server keeps what it sent,
+  as JSON, so the next run is compared with that and the change is found
+  (`juris-tests/tests/juris-kit/service-dispatcher.live.test.mjs`).
+
+  ```js
+  const rows = [{ title: "Milk", done: false }];
+  const handler = serviceDispatcher({ todoRows: () => rows }, "/api", {
+      live: { queries: ["todoRows"], public: true },
+  });
+  await served(handler, async (api) => {
+      const stream = await openStream(api);
+      await subscribe(api, stream.client, "todoRows");
+      await stream.next();
+      // → { key: "todoRows:[]", full: [{ title: "Milk", done: false }] }
+      rows[0].done = true;
+      await handler.invalidate(["todoRows"]);
+      await stream.next();
+      // → { key: "todoRows:[]", set: [["0.done", true]], del: [] }
+  });
+  ```
+
+  - A client joining a group is sent the last answer, not what the object has become since; the next
+    run brings it up to date with the others.
+
+    ```js
+    const rows = [{ title: "Milk", done: false }];
+    const handler = serviceDispatcher({ todoRows: () => rows }, "/api", {
+        live: { queries: ["todoRows"], public: true },
+    });
+    await served(handler, async (api) => {
+        const first = await openStream(api);
+        await subscribe(api, first.client, "todoRows");
+        await first.next();
+        rows[0].done = true;
+        const second = await openStream(api);
+        await subscribe(api, second.client, "todoRows");
+        (await second.next()).full; // → [{ title: "Milk", done: false }]
+        await handler.invalidate(["todoRows"]);
+        (await second.next()).set; // → [["0.done", true]]
+    });
+    ```
+
+  - What is compared is what goes on the wire: a run whose answer differs only in what JSON does
+    not carry sends nothing.
+
+    ```js
+    let runs = 0;
+    const stamped = () => {
+        runs += 1;
+        return { at: new Date(0), note: undefined };
+    };
+    const handler = serviceDispatcher({ stamped }, "/api", {
+        live: { queries: ["stamped"], public: true },
+    });
+    await served(handler, async (api) => {
+        const stream = await openStream(api);
+        await subscribe(api, stream.client, "stamped");
+        await stream.next();
+        await handler.invalidate(["stamped"]);
+        await sleep(10);
+        runs; // → 2
+    });
+    ```
 
 - **The event stream takes GET and HEAD**, the one address under the base a browser GETs. An
   OPTIONS is a 204 and any other method a 405, each with `Allow: GET, HEAD` (`refuseMethod`,
@@ -16733,6 +19103,54 @@ Three things about the dispatcher that an app has to know:
     });
     errors;
     // → ["live.authorize: Cannot set headers after they are sent to the client"]
+    ```
+
+  - So a context that sets a cookie holds `res` only on the calls that write one, and every other
+    context, a subscribe's among them, holds the session's token and no response. This is the
+    recommended sign-in: the service calls `this.setSession`, and the context says where it exists.
+
+    ```js
+    import {
+        appendSetCookie,
+        parseCookies,
+        serializeCookie,
+    } from "juris-kit/server/http.js";
+
+    const writesCookie = new Set(["/api/signIn", "/api/signOut"]);
+    const context = (req, res) => {
+        const { session } = parseCookies(req.headers.cookie);
+        if (!writesCookie.has(req.url)) return { session };
+        const setSession = (token, maxAge = 86_400) => {
+            appendSetCookie(res, serializeCookie("session", token, { maxAge }));
+        };
+        return { session, setSession };
+    };
+    const accounts = {
+        async signIn(name) {
+            this.setSession(`token-of-${name}`);
+            return { name };
+        },
+        async signOut() {
+            this.setSession("", 0);
+            return {};
+        },
+        async whoAmI() {
+            return { session: this.session, canWrite: "setSession" in this };
+        },
+    };
+    const handler = serviceDispatcher(accounts, "/api", { context });
+    await served(handler, async (api) => {
+        const call = (name, args, cookie = "") => fetch(`${api}/${name}`, {
+            method: "POST",
+            headers: { "content-type": "application/json", cookie },
+            body: JSON.stringify(args),
+        });
+        const signedIn = await call("signIn", ["ada"]);
+        signedIn.headers.get("set-cookie").split("; ").slice(0, 3);
+        // → ["session=token-of-ada", "Path=/", "HttpOnly"]
+        const answer = await call("whoAmI", [], "session=token-of-ada");
+        await answer.json(); // → { session: "token-of-ada", canWrite: false }
+    });
     ```
 
 - **Who is calling.** A service reads its caller from `this`, and every call the framework makes
@@ -19048,8 +21466,8 @@ await new Promise((resolve) => setTimeout(resolve, 10));
   ```
 
 - `inlineScriptHashes(document)` answers the CSP source of every script the document runs inline
-  (`'sha256-…'`, quoted as a policy writes it): the loader, and the reload client in development;
-  never the JSON blocks, which run nothing.
+  (`'sha256-…'`, quoted as a policy writes it): the loader, a script of the app's in `trustedHead`,
+  and the reload client in development; never the JSON blocks, which run nothing.
 
   ```js
   import { createHash } from "node:crypto";
@@ -19070,6 +21488,22 @@ await new Promise((resolve) => setTimeout(resolve, 10));
   const doc = renderDocument({}, { entry, devReload: reload, jurisDev: {} });
   inlineScriptHashes(doc).length; // → 2
   ```
+
+  ```js
+  const theme = "<script>document.body.dataset.theme = 'dark'</script>";
+  const doc = renderDocument({}, { entry, trustedHead: theme });
+  inlineScriptHashes(doc).length; // → 2
+  ```
+
+  - A `trustedHead` script is counted only when it is written plain, as `<script>` or
+    `<script type="module">`. One with any other attribute is not, so a policy built from these
+    hashes blocks it.
+
+    ```js
+    const theme = '<script id="theme">document.body.dataset.theme = 1</script>';
+    const doc = renderDocument({}, { entry, trustedHead: theme });
+    inlineScriptHashes(doc).length; // → 1
+    ```
 
   A hash, not a nonce, because a page a cache shares is one set of bytes for every reader. The
   page pipeline's `headers` hook is given them.
@@ -19230,6 +21664,35 @@ reload.close();
   await quiet();
   restarts; // → ["server/cart.js"]
   reload.close();
+  ```
+
+  A working `onRestart`, in the `server.mjs` of "Your first app": `close()` gives the port back, and
+  `process.execve` (not on Windows) replaces the process with a new one, on the same terminal. The
+  app's `createApp` hands `devReload` on to `createJurisServer`.
+
+  ```js excerpt
+  import { createApp } from "./app.mjs";
+  import { services } from "./services.js";
+
+  const dev = !process.env.PROD;
+
+  async function restart() {
+      await app.close();
+      const [node, ...args] = process.argv;
+      process.execve(node, [node, ...process.execArgv, ...args]);
+  }
+
+  const reload = dev
+      ? devReload({
+          root: import.meta.dirname,
+          restartOn: ["app.mjs", "services.js", "client/app.js"],
+          reloadOn: ["client/boot.js"],
+          onRestart: restart,
+      })
+      : undefined;
+
+  const app = await createApp({ services, dev, devReload: reload });
+  await app.listen({ port: Number(process.env.PORT ?? 3000) });
   ```
 
 - The framework's own directories (the `juris` package, wherever it is installed, and the kit's
@@ -20302,7 +22765,14 @@ await web2.stop();
 
   ```js
   const pool = fakePg();
-  const bus = createPgOutboxBus({ pool, targets: cart, coalesceMs: 8 });
+  // A clock that stands still: however slow this run, the six commits are one
+  // burst, read at once on the first and once more when the window ends.
+  const bus = createPgOutboxBus({
+      pool,
+      targets: cart,
+      coalesceMs: 8,
+      now: () => 1_700_000_000_000,
+  });
   const heard = [];
   bus.subscribe((targets) => heard.push(targets.length));
   await bus.start();
@@ -20864,7 +23334,7 @@ bus.subscribe(async (targets) => {
 await bus.start();
 for (const id of ["1", "2", "3", "4", "5"]) pool.commit("cart", id);
 await bus.poll();
-await new Promise((resolve) => setTimeout(resolve, 50));
+await new Promise((resolve) => setTimeout(resolve, 200));
 heard; // → ["1", "2", "3", "4", "5"]
 [bus.stats().polls, most]; // → [3, 1]
 await bus.stop();
@@ -21063,8 +23533,8 @@ document.querySelector("#app").innerHTML;
 ```
 
 The rule is that both sides read it from **one module both import**, the way an app shares its
-routes and its title (`app/hello` keeps them in `client/app.js`, which its server's entry and its
-browser's entry both import): `export const juris = { allowSchemes: ["magnet"] }` beside them, and
+routes and its title ("Your first app" keeps them in `client/app.js`, which its server's entry and
+its browser's entry both import): `export const juris = { allowSchemes: ["magnet"] }` beside them, and
 `createJurisServer({ …, juris })`, `hydrate({ …, juris })`.
 
 ```js excerpt
@@ -21693,6 +24163,24 @@ import SSRRenderer from "juris-kit/server/ssr-renderer.js";
 `api.useState(key, initial)` returns `[get, set]` for a slot in the state tree,
 `$local.<Component>.<n>.<key>` (the `localPath` option renames the root), where `n` is the
 instance's place, in render order, among that component's instances that call `useState`.
+
+`initial` alone writes nothing: `$local` appears once `set` is called, so a value a component only
+started with is not in `#state`, and the browser starts from `initial` too.
+
+```js
+const juris = new Juris({ features: { ssr: SSRRenderer } });
+juris.registerComponent("Faq", (props, api) => {
+    const [open, setOpen] = api.useState("open", false);
+    if (props.startOpen) setOpen(true);
+    return { details: { open: () => open(), children: ["Delivery?"] } };
+});
+const quiet = await juris.renderRequest({ layout: { Faq: {} } });
+JSON.parse(quiet.json).$local; // → undefined
+const opened = await juris.renderRequest({
+    layout: { Faq: { startOpen: true } },
+});
+JSON.parse(opened.json).$local; // → { Faq: { 0: { open: true } } }
+```
 
 ```js
 const juris = new Juris({ features: { ssr: SSRRenderer } });
@@ -23830,6 +26318,17 @@ function request(url, path, { method = "GET", headers = {}, body } = {}) {
 **Rendering and the browser** (`juris.js`, `html-safety.js`, both renderers (`dom-renderer.js` and
 the kit's `server/ssr-renderer.js`), `router.js`, `client.js`)
 
+- `layoutFromData` leaves out every component a layout from data names, wherever it stands, its
+  props included, unless the call lists it. `juris-tests/tests/juris/juris.layout-from-data.test.mjs`.
+
+  ```js
+  juris.registerComponent("Badge", (props) => ({ b: props.text }));
+  const row = JSON.parse('{"Badge":{"text":"New","note":{"Refund":{}}}}');
+  juris.layoutFromData(row, { components: ["Badge"] });
+  // → { Badge: { text: "New" } }
+  juris.layoutFromData(row); // → null
+  ```
+
 - Both renderers refuse the same tags, attribute names (`on…`) and URL schemes (after stripping
   control characters), and `srcdoc` outright; `enhance` refuses `innerHTML` anywhere in an enhanced
   subtree unless told. `juris-tests/tests/juris/elements.test.mjs`,
@@ -24833,10 +27332,10 @@ async function openShop(config) {
 
 These are known, and not closed:
 
-- **Layout branding.** Tags are checked, but a row from data that reaches a child position can
+- **Layout branding.** Tags are checked, but a raw row from data that reaches a child position can
   still name a registered component (`{ SomeComponent: { … } }`) and instantiate it with the row's
-  props. Closing it needs a brand on every layout that JSON cannot forge. It is latent while no app
-  renders raw rows as children.
+  props. Closing that for raw rows needs a brand on every layout that JSON cannot forge, so it stays
+  open for a row rendered directly, and is latent while no app does.
 
   ```js
   juris.registerComponent("RefundButton", (props) => ({
@@ -24846,6 +27345,18 @@ These are known, and not closed:
   // Today: the second row draws the component.
   juris.renderToString({ ul: { children: rows } });
   // → <ul><li>Milk</li><button>Refund order 7</button></ul>
+  ```
+
+  `juris.layoutFromData(value, { components })` is the way to close it for data: a row that goes
+  through it names only the components the app listed ("Layouts from a database").
+
+  ```js
+  juris.registerComponent("RefundButton", (props) => ({
+      button: `Refund order ${props.order}`,
+  }));
+  const rows = JSON.parse('[{"li":"Milk"},{"RefundButton":{"order":7}}]');
+  const children = juris.layoutFromData(rows);
+  juris.renderToString({ ul: { children } }); // → <ul><li>Milk</li></ul>
   ```
 
 - **CSS from data.** A `style` string, or an allowed value in a style object, can still make the
@@ -25077,9 +27588,8 @@ These are known, and not closed:
 These are gaps between what this file describes and what a framework ready for other people would
 have, stated so nobody reads them as done:
 
-- **The fixes are not yet proven in production.** Juris runs two real-time sites in production and
-  `app/hello`. The sites work around the issues fixed in this version (F1–F27) and are being moved
-  to it (see "Where it stands").
+- **The fixes are not yet proven in production.** The issues fixed in this version (F1–F27) are
+  held by the framework's suites, not yet by a long run in production.
 - **Signing in is the app's.** A request context, a session cookie, and the rule for when a viewer
   argument is believed are written by each members app ("Your first app").
 - **The kernel does not wire a page cache itself.** A cache is taken only beside a dispatcher the
@@ -25091,8 +27601,7 @@ have, stated so nobody reads them as done:
   `juris-tests/tests/juris-kit/pg-outbox.read.test.mjs`,
   `juris-tests/tests/juris-kit/pg-outbox.listen.test.mjs`) run against an in-memory stand-in for the
   driver and its table, so they hold what a bus sends and how it reads an answer, never what a real
-  server does. The Postgres bus runs against a real database every day under an app's own pipeline,
-  not under a framework test.
+  server does.
 - **No bundling** means more module requests, and code a page never calls is downloaded all the
   same ("The code a browser runs is the file on disk"); the server renderer is no longer part of
   it, since it moved to the kit.
@@ -25109,7 +27618,7 @@ have, stated so nobody reads them as done:
   carries a browser suite: `innerHTML`, `classList`, `style` and `xlink:` in a real DOM, a keyed
   component with no element root, `enhance` over a refused tag, the loader and the boot in a browser
   without `requestIdleCallback`, the router's boot and hash mode, `Link`'s bound `href` and the live
-  status over a real stream are checked in a real browser only through an app's own checks.
+  status over a real stream are not checked in a real browser by any framework suite.
 - **No changelog.** The `juris` and `juris-kit` packages are versioned together, and the
   kit depends on the core's matching minor version; what changed is in each repository's history.
 - **The boundary is held in two places.** The `juris` package's `tests/boundary.test.mjs` holds what
@@ -25131,4 +27640,5 @@ have, stated so nobody reads them as done:
 - **Devtools in a real browser.** The feature is tested on the stand-in DOM only. What needs Chrome
   (`inspectedWindow.eval` under a page's policy, `$0` and `inspect()`, `window.event` during
   dispatch, the outline's geometry when scrolled, transformed or fixed, and the overhead budget on a
-  large real app's object list) is the extension's release checklist (`DEVTOOLS.md`, "Tests").
+  page with about 500 component instances) is the extension's release checklist (`DEVTOOLS.md`,
+  "Tests").

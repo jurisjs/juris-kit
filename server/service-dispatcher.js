@@ -653,6 +653,10 @@ export function serviceDispatcher(services, base = "/api", options = {}) {
         client.timer.unref?.(); // a grace period is not a reason to keep the process alive either
     };
 
+    // An answer as a client receives it. What JSON cannot carry (a BigInt, a cycle) throws, as it would
+    // on the way out, and is that query's failure.
+    const onTheWire = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+
     // Re-run one group's query, push what changed to every client watching it. Re-runs of the same group
     // never overlap: two invalidations in quick succession start two re-runs, and if the second's result
     // landed first the first's older result would then be diffed against it and sent as a revert, leaving
@@ -674,13 +678,17 @@ export function serviceDispatcher(services, base = "/api", options = {}) {
             return;
         }
         try {
+            // What the clients were sent, as they were sent it. A query is free to answer an object it
+            // keeps and changes later: `last` held that object itself, so the next run compared it with
+            // itself, found no change, and sent none, and a client joining was sent what it had become.
+            const answer = onTheWire(value);
             if (full) {
-                group.last = value;
-                await broadcast(group, { key, full: value });
+                group.last = answer;
+                await broadcast(group, { key, full: answer });
                 return;
             }
-            const changes = diff(group.last, value);
-            group.last = value;
+            const changes = diff(group.last, answer);
+            group.last = answer;
             if (changes.set.length || changes.del.length) await broadcast(group, { key, set: changes.set, del: changes.del });
         } catch (error) {
             // A result JSON cannot carry (a BigInt, a cycle) throws in the diff or on the way out,

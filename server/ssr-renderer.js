@@ -205,12 +205,13 @@ export default class SSRRenderer {
 
     // Layouts only mean something in a child position. An object given where text goes need not be
     // one (`"data-cart": { items: 2 }`), so devMode says what it was given, as the DOM renderer does.
-    rejectLayout(value, position) {
+    // `content` and `tag` are given where the value may come from a function that is a tag's whole
+    // content, and read only here, once something is refused (Juris.layoutInValue).
+    rejectLayout(value, position, content = null, tag = null) {
         if (value === null || typeof value !== "object") return false;
         if (this.devMode) {
-            const given = Array.isArray(value) ? "a list" : "an object";
-            const reason = `"${position}" was given ${given}, and takes text`
-                + " (a string or a number; a layout goes in children)";
+            const wholeContent = this.juris.wholeContentOf(content, tag);
+            const reason = this.juris.layoutInValue(value, position, wholeContent);
             this.juris.refused("layout-in-value", reason, { name: position, value, component: this.owner });
         }
         return true;
@@ -257,7 +258,9 @@ export default class SSRRenderer {
         try {
             let result = this.juris.invokeDefinition(instance, props);
             if (typeof result === "function") result = this.evaluate(result);
-            const layout = this.juris.oneLayout(result, "component");
+            // A promise cannot be waited for: this place renders empty, and the page is incomplete.
+            if (this.stateManager.isThenable(result)) this.trace?.flags.add("unresolved");
+            const layout = this.juris.definitionLayout(result, instance);
             return this.node(this.juris.withKey(layout, props.key), namespace, select);
         } catch (error) {
             if (error instanceof FallbackSignal) {
@@ -350,7 +353,7 @@ export default class SSRRenderer {
             // Text as a text layout is (Juris textOf): null, undefined, true and false are nothing.
             if (key === "textContent") {
                 held = key;
-                if (!this.rejectLayout(resolved, key)) {
+                if (!this.rejectLayout(resolved, key, content, tag)) {
                     text = this.juris.textOf(resolved);
                     inner = escapeText(text);
                 }

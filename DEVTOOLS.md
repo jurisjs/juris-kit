@@ -10,8 +10,9 @@
 >
 > **Status before approval: a proposal for the author's review, 2026-11-05.** It was written
 > against `juris` 0.93.0 and `juris-kit` 0.93.0, the checkouts beside this file, and all line
-> numbers refer to them. It was checked against a large real app, which runs 0.92.0 from npm. A
-> bold **Dn** marks a decision taken here, with its reason, for the author to overturn. "Open questions", near the end, holds the
+> numbers refer to them. It was checked against a page with about 500 component instances, on
+> 0.92.0 from npm. A bold **Dn** marks a decision taken here, with its reason, for the author to
+> overturn. "Open questions", near the end, holds the
 > decisions that should not be taken without him. The section "The contract" is written as it would
 > read in REFERENCE.md once built.
 
@@ -52,7 +53,7 @@ All of it was checked in the code.
 | Piece | Where | What it gives | What a devtools lacks |
 | --- | --- | --- | --- |
 | `window.$juris[n]` | `juris.js:216-221` | The whole instance, in devMode, in a browser, never on a server instance (`!this.isServer`) | A version, a stable shape, a way to learn of an instance from outside. It is the instance's internals, which change |
-| `componentTree()`, `findComponents(name)`, `onTreeChange(fn)` | `component-manager.js:55-137`, `juris.js:1142-1152` | Instances tracked from `track` (`:55`); a snapshot of `id`, `name`, `key`, raw `props`, `local: { path, values }` (initials included, `juris.js:502-505`), `root` (a DOM node), `adopted`, `disposed`, `children` (`:85-99`); the whole tree passed to every watcher after each draw that changed it (`:123-137`, called from `dom-renderer.js:249`) | Bounded values. The props are unbounded, and in a large real app a row's props hold the row. The whole tree is rebuilt on every change |
+| `componentTree()`, `findComponents(name)`, `onTreeChange(fn)` | `component-manager.js:55-137`, `juris.js:1142-1152` | Instances tracked from `track` (`:55`); a snapshot of `id`, `name`, `key`, raw `props`, `local: { path, values }` (initials included, `juris.js:502-505`), `root` (a DOM node), `adopted`, `disposed`, `children` (`:85-99`); the whole tree passed to every watcher after each draw that changed it (`:123-137`, called from `dom-renderer.js:249`) | Bounded values. The props are unbounded, and a row's props can hold the whole row. The whole tree is rebuilt on every change |
 | Node to instances | `juris.componentInstances` (`juris.js:1137-1139`), over the renderer's `WeakMap` (`dom-renderer.js:186`) | Root node to `[instance]`, innermost first. **This is public, not devMode-gated** | An instance has an `id` only in devMode (`component-manager.js:57`) |
 | `stateManager.observe(fn)` | `state-manager.js:342-361` | `(path, value, previous)` for every write, after the subscribers it woke (within a `batch`, at the write itself) | Which bindings woke, in what order, and how long each took |
 | `onChange` | `new Juris({ onChange })` (`juris.js:142`), `state-manager.js:93` (commented "devtools hook"), `:835` | Each changed path, after a pass's binding phase | `hydrate` cannot pass it, and it names paths, not writes |
@@ -69,8 +70,8 @@ All of it was checked in the code.
 - **`hydrate` cannot turn devMode on.** Its options are a closed list (`client.js:79-80`). `juris`
   takes `allowTags`, `allowSchemes` and `allowInnerHTML` and refuses anything else
   (`sharedOptions`, `juris.js:44-57`). It builds `new Juris({ ...instanceOptions, state, services
-  })` (`client.js:206`). So no page booted by `hydrate` ever has devMode on, a large real app's
-  included: it passes `dev` to the kernel, and nothing turns that into the browser's devMode. Every
+  })` (`client.js:206`). So no page booted by `hydrate` ever has devMode on: an app passes `dev`
+  to the kernel, and nothing turns that into the browser's devMode. Every
   insight below waits on this, and phase 1 starts with it.
 - **A binding does not know what it draws.** `bindProperty(element, value, apply)`
   (`dom-renderer.js:780-789`) is handed a closure, and the property's name stays in
@@ -127,11 +128,11 @@ the page can call it. It exposes nothing that `window.$juris[n]` does not alread
 own bookkeeping, and nothing of `$server` ever reaches a browser.
 
 **What "development only" rules out.** The render trace, the cache decision and the server's half
-of the live chain cannot be examined for a production page or a production incident. A QA server
-run with `PROD=1` has none of it. A QA server run in development mode has all of it, for anyone who
+of the live chain cannot be examined for a production page or a production incident. A server
+in production mode has none of it. A server in development mode has all of it, for anyone who
 can load its pages. Each render record is reachable only by its unguessable id, which only that
 page carries, and live dev fields go only on streams the dispatcher already binds to their owner.
-So a QA server in development mode tells nobody more than the page they can already read, plus the
+So a server in development mode tells nobody more than the page they can already read, plus the
 names of the services whose changes reach the queries that page watches.
 
 ## The contract
@@ -249,8 +250,8 @@ Each insight is written as: where its data comes from today; what has to be adde
   runs before the first run (`juris.js:1018`), attaches it to the `refresh` (`WeakMap`) and to its
   element (`WeakMap` element to `Set`). Seats and roots go in a `Set`, matched by their current
   node when asked. Disposing a binding removes it.
-  - **Cost:** about 150 bytes per binding. A large real app's object list after five pages has
-    about 1,800 bindings and 500 component instances, so about 270 KB.
+  - **Cost:** about 150 bytes per binding. A page with about 1,800 bindings and 500 component
+    instances comes to about 270 KB.
 - **Reads are not copied.** `node` and `binding` invert `subscribers` when asked (**D7**): about
   2,000 bindings with three reads each, once per click.
 - **The last cause.** The feature's `run` keeps each pass's summary (its changed paths, and its
@@ -294,10 +295,10 @@ and nothing per write beyond the first 50 values.
 
 **Realism.**
 
-- A live answer in a large real app can be 8 MB. `assign` writes it leaf by leaf when the
+- A live answer can be 8 MB. `assign` writes it leaf by leaf when the
   array's length is unchanged (`juris.js:653-676`), so one patch can be tens of thousands of
   writes. They are counted, and only the first 50 are kept.
-- A large real app has a component that is one function rebuilding a whole screen. The timeline
+- A component can be one function that rebuilds a whole screen. The timeline
   shows it as one `root` binding whose `applyMs` is the redraw, which is the insight wanted there.
 
 **Shape.** `Pass` ("The contract").
@@ -321,8 +322,8 @@ and nothing per write beyond the first 50 values.
 - The outline is drawn by the page side, in a closed shadow root on a host appended to
   `document.documentElement`, outside the root Juris draws into, so no layout ever sees it.
 - **Cost:** nothing beyond devMode's tree, until a connection subscribes.
-- **Realism:** about 500 instances in a large real app's object list after five pages, so a `tree`
-  message of about 30 KB, sent at most once per frame.
+- **Realism:** a page with about 500 component instances makes a `tree` message of about 30 KB,
+  sent at most once per frame.
 
 **Shape.** `TreeNode`, `Component`.
 
@@ -429,8 +430,8 @@ and nothing per write beyond the first 50 values.
   (**D13**).
 - **Cost:** in development, a counter and a timestamp per invalidation, and about 80 bytes per
   patch. In production the dispatcher has no `dev`, and the payload is the same bytes as today.
-- **Realism:** a large real app declares 29 live queries with `strictQueries`, and every service
-  declares `touches`, so every chain is explicit. Its bus runs only with `BUS=1`.
+- **Realism:** with 29 live queries declared under `strictQueries`, and `touches` declared on every
+  service, every chain is explicit.
 
 **Shape.** `LiveEvent`.
 
@@ -463,7 +464,8 @@ answers build `b42`, code id `c3d4`."
 
 - The VS Code extension indexes every `registerComponent` with a literal name:
   `components()` → `Map name → [{ name, kind, props, location, definition }]`
-  (`juris-vscode/src/README.md:171`). A large real app's 131 registrations all use literal names.
+  (`juris-vscode/src/README.md:171`). A workspace of 131 registrations, all with literal names, is
+  indexed whole.
 - The extension has no URI handler (`extension.js`), and its publisher id is `jurisjs`
   (`package.json:6`).
 
@@ -650,7 +652,7 @@ own `tests/` (`core`, `render`, `boundary`; and the kit's `server`) for the rule
 - `window.event` during dispatch;
 - the hydration comparison against a real parser (the stand-in DOM is not a parser: whitespace,
   style serialisation, attribute order);
-- the overhead budget on a large real app's object list after five pages.
+- the overhead budget on a page with about 500 component instances and 1,800 bindings.
 
 A script (Playwright, with the unpacked extension) can drive the page side through the same
 expressions. The panel itself is checked by a person.
@@ -664,7 +666,7 @@ expressions. The panel itself is checked by a person.
 | **3. The server channel, the live chain, mixed builds** | `#juris-dev`'s id; the render record and `/__juris/render/<id>`; preload timings; the server's refusals in the trace; the dispatcher's `dev`; `/version`'s `codeId`; the live client's patch hook; Builds (with and without devMode); the Server, Live and Builds views; the VS Code URI handler (in `juris-vscode`, separately) | Kit about 400 lines and about 30 tests. Core about 80 lines. Extension about 700 lines. About three weeks |
 
 Phase 1 starts with `hydrate`'s `devMode`, since nothing else can be seen without it. It can ship on
-its own, and a large real app would see devMode's warnings in development for the first time (open
+its own, and an existing app would see devMode's warnings in development for the first time (open
 question 1).
 
 ## Open questions
@@ -713,13 +715,13 @@ Each is marked where it is taken. One line each, for overturning.
 | **D5** | Instrument by replacing methods on the instance, never with `if (devMode)` on a write's path. What runs with devMode off is one argument at a binding's creation, and one property read per live patch and per stream opened | "Off costs nothing" becomes a property a test can check: the instance's methods are the prototype's |
 | **D6** | The binding records, the pass ring, the refusals and the hydration comparison exist from boot. The timeline exists only while subscribed | "Why did this change" must work after the fact. Timing every callback should cost only when watched |
 | **D7** | A binding's reads are read from `subscribers` when asked, never copied per run | Zero cost per run |
-| **D8** | Value limits: 1,000 characters, 100 items, 200 keys, depth 3 (8 at most), 1 MiB per answer | A large real app holds a 2 MB root and 8 MB live answers |
+| **D8** | Value limits: 1,000 characters, 100 items, 200 keys, depth 3 (8 at most), 1 MiB per answer | A page can hold a 2 MB root and 8 MB live answers |
 | **D9** | Read-only protocol | See open question 3 |
 | **D10** | Hydration is compared once, at the first mount, eagerly | No server nodes kept alive, and no clone. The comparison costs one walk |
 | **D11** | `html-safety.js` answers a stable `rule` beside `reason` | The reason's words may change. A panel, like the live client with `LIVE_CODES`, matches a code |
 | **D12** | The render record is fetched by an unguessable id, not embedded | The cache's decision comes after the document (`kernel.js:252`). Pages nobody inspects stay small |
 | **D13** | The live chain rides the live stream (a `dev` field, `event: devtools`). No response header links a call to its trace: the panel matches by service name and order | Same owner binding, and same order as the patches. No new connection, and no change to the stubs |
-| **D14** | Paths under private roots are counted, never listed, and hidden errors stay hidden, even in development | A path can carry an id (`$server.sessions.<token>`). A QA box in development is still a shared box |
+| **D14** | Paths under private roots are counted, never listed, and hidden errors stay hidden, even in development | A path can carry an id (`$server.sessions.<token>`). A development server several people can reach is still a shared one |
 | **D15** | Builds works without devMode, from Resource Timing | Rolling deploys happen in production |
 | **D16** | `/version` answers `codeId` | A code id in a URL cannot otherwise be matched to a build. It is in every module URL already |
 | **D17** | Open in Sources through `inspect(definition)`. Open in VS Code through a URI handler in `juris-vscode`, with the name as the only key | The first needs nothing new. The second needs nothing from Juris |
