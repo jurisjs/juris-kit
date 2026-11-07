@@ -1,0 +1,42 @@
+{
+  "name": "juris-kit",
+  "version": "0.93.0",
+  "description": "A framework for server-rendered web apps whose pages stay live: no build step, no third-party runtime dependency",
+  "keywords": [
+    "framework",
+    "server-rendering",
+    "live-queries",
+    "reactive",
+    "no-build"
+  ],
+  "homepage": "https://github.com/jurisjs/juris-kit#readme",
+  "license": "Apache-2.0",
+  "author": "Resti Guay",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jurisjs/juris-kit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jurisjs/juris-kit/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "juris": "^0.93.0"
+  },
+  "exports": {
+    "./server/*": "./server/*"
+  },
+  "files": [
+    "server/",
+    "README.md",
+    "REFERENCE.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\""
+  }
+}
