@@ -85,6 +85,11 @@ export class Node extends Target {
 
     get nextSibling() {
         const siblings = this.parentNode?.childNodes;
+        return siblings ? (siblings[siblings.indexOf(this) + 1] ?? null) : null;
+    }
+
+    get nextSibling() {
+        const siblings = this.parentNode?.childNodes;
         return siblings ? siblings[siblings.indexOf(this) + 1] ?? null : null;
     }
 

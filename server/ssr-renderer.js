@@ -11,8 +11,9 @@
 //
 //   const juris = new Juris({ isServer: true, features: { ssr: SSRRenderer } });
 
+import { randomUUID } from "node:crypto";
 import { FallbackSignal } from "juris/errors.js";
-import { checkAttribute, checkInnerHTML, checkStyle, checkTag, classTokens } from "juris/html-safety.js";
+import { checkAttribute, checkInnerHTML, checkStyle, checkTag, classTokens, safeUrl } from "juris/html-safety.js";
 
 const VOID_ELEMENTS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 // HTML's boolean attributes, as dom-renderer.js keeps them: present or absent on an HTML element, and
@@ -85,11 +86,119 @@ const namespaceInside = (namespace, lowerTag, encoding) => {
 };
 const foreignContext = (inherited) => (inherited === IN_MATH_TEXT ? null : inherited);
 
-export const escapeText = (value) => String(value).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+// Most text holds nothing to escape, and looking for it costs far less than a replace that finds none.
+const REFERENCES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const reference = (character) => REFERENCES[character];
+
+export const escapeText = (value) => {
+    const text = String(value);
+
+    return /[&<>]/.test(text) ? text.replace(/[&<>]/g, reference) : text;
+};
+
 // Both quotes, so the value is safe whichever one the markup around it uses: the renderer writes
 // double quotes, but an app's own shell or head may single-quote an attribute.
-export const escapeAttribute = (value) =>
-    String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+export const escapeAttribute = (value) => {
+    const text = String(value);
+
+    return /[&<>"']/.test(text) ? text.replace(/[&<>"']/g, reference) : text;
+};
+
+// ---- compiled layouts --------------------------------------------------------------------------
+//
+// Juris.compile, on the server. A layout with slots is drawn once, by this renderer, with a word in
+// each slot; what comes out is split at those words into fixed text and the places values go. So the
+// fixed text is what the renderer writes, by every rule it has, and there is no second serializer to
+// fall out with it. Compiling makes data, not code: nothing here needs eval, and a layout stored in a
+// database stays data.
+//
+// A place writes a value only when the rule for it is the same whatever else the layout says: text,
+// an attribute, a boolean. Any other value (an object, a function) is written by the ordinary
+// renderer, from the ordinary layout, so what is drawn is never anything but what that one writes.
+
+const compileError = (reason) => new TypeError(`Juris.compile: ${reason}`);
+const NO_NAME = "a slot's name is a field's name, a string with something in it";
+
+// What `slot` makes for a layout written as a function. Like { $slot: name } in a stored layout, but
+// that it says so when it is used as the value it stands for, which would be written into the fixed
+// text as "[object Object]". Branching on it cannot be seen here: devMode looks for that (filled).
+const slotMarker = (name) => {
+    if (typeof name !== "string" || name === "") throw compileError(NO_NAME);
+    return {
+        $slot: name,
+        [Symbol.toPrimitive]() {
+            throw compileError(`slot("${name}") is a place, not a value: give it as a whole text or attribute`);
+        },
+    };
+};
+
+// An attribute being opened, at the end of what has been written so far.
+const ATTRIBUTE_OPENED = / ([^\s"=]+)="$/;
+
+// A null makes no attribute, but for these: `key` writes it, `value` writes it empty, and `for` or
+// `data-key` given twice keep what the other key gave. The ordinary renderer writes those.
+const NULL_IS_NOT_NOTHING = new Set(["data-key", "for", "value"]);
+
+// A place's writers answer what to write for a value, undefined for one that is not theirs to write.
+const writeText = (value) => {
+    if (typeof value === "string" || typeof value === "number") return escapeText(value);
+    return value === null || value === undefined ? "" : undefined;
+};
+
+const writeBoolean = (name) => {
+    const written = ` ${name}=""`;
+
+    return (value) => {
+        if (value === true) return written;
+        return value === false || value === null || value === undefined ? "" : undefined;
+    };
+};
+
+// A URL a value gives is refused by the ordinary renderer, which says so in devMode. `name` was
+// written, so a refusal of a scheme that runs code can only mean it is an attribute that holds a URL.
+const writeAttribute = (name, schemes) => {
+    const holdsUrl = !checkAttribute(name, "javascript:", schemes).ok;
+    const nullIsNothing = !NULL_IS_NOT_NOTHING.has(name);
+
+    return (value) => {
+        if (typeof value === "string" || typeof value === "number") {
+            if (holdsUrl && !safeUrl(value, schemes)) return undefined;
+            return ` ${name}="${escapeAttribute(value)}"`;
+        }
+        return nullIsNothing && (value === null || value === undefined) ? "" : undefined;
+    };
+};
+
+// One draw of a compiled layout: what the function Juris.compile answers gives, in a child's place.
+// A class of the kit's, so data can never pass for one, as JSON holds no such thing.
+class FilledLayout {
+    constructor(template, values) {
+        this.template = template;
+        this.values = values;
+    }
+
+    // The layout this stands for, as the browser draws it.
+    ordinary() {
+        return this.template.ordinary(this.values);
+    }
+
+    // Its markup, or null when a value is not one a place writes.
+    written() {
+        const { parts, slots } = this.template;
+        const { values } = this;
+        let html = parts[0];
+
+        for (let index = 0; index < slots.length; index += 1) {
+            const { name, write } = slots[index];
+            const text = write(Object.hasOwn(values, name) ? values[name] : undefined);
+
+            if (text === undefined) return null;
+            html += text + parts[index + 1];
+        }
+
+        return html;
+    }
+}
 
 export default class SSRRenderer {
     // Constructed with (juris, config), as every feature is; it needs only the instance.
@@ -102,6 +211,7 @@ export default class SSRRenderer {
         // parser may not read a <style> start tag as one (see element): there a <style>'s raw text
         // could be read as markup.
         this.styleAsMarkup = 0;
+        this.mark = null; // the word in each slot, while a layout is compiled (compile)
     }
 
     get stateManager() {
@@ -156,6 +266,192 @@ export default class SSRRenderer {
                 for (const cleanup of cleanups) cleanup();
             }
         }
+    }
+
+    // ---- compiled layouts ---------------------------------------------------------------
+
+    // Juris.compile's server half: `source` is what it was given, `ordinary` makes the ordinary layout
+    // from values. Refuses here, at once, what could not be written the same for every value.
+    compile(source, ordinary) {
+        const fromFunction = typeof source === "function";
+        const layout = fromFunction ? source(slotMarker) : source;
+        this.checkChild(layout, false);
+
+        // Made for this compile, so no text in a layout can pass for a slot. It has no ":", which a
+        // URL's check would read as a scheme, and nothing an escape changes.
+        const mark = `juris-slot-${randomUUID()}`;
+        const names = [];
+        const marked = this.juris.fillSlots(layout, (name) => {
+            names.push(name);
+            return `${mark}-${names.length - 1}-`;
+        });
+
+        this.mark = mark;
+        try {
+            const html = this.node(marked, null, null);
+            const template = { ...this.splitAtMarks(html, names), ordinary, fromFunction };
+            return (values = {}) => new FilledLayout(template, values);
+        } finally {
+            this.mark = null;
+        }
+    }
+
+    // What is drawn is split where each slot's word was written. No `<` or `>` is written but a tag's
+    // (text and attributes escape theirs, and innerHTML and <style> are refused), so the last of them
+    // says which a word is in. An attribute's whole text belongs to its place, for the place to leave
+    // out.
+    splitAtMarks(html, names) {
+        const parts = [];
+        const slots = [];
+        const found = new Set();
+        let fixed = "";
+        let from = 0;
+
+        for (const match of html.matchAll(new RegExp(`${this.mark}-(\\d+)-(boolean)?`, "g"))) {
+            const name = names[Number(match[1])];
+            const inTag = html.lastIndexOf("<", match.index) > html.lastIndexOf(">", match.index);
+            let write = writeText;
+
+            fixed += html.slice(from, match.index);
+            from = match.index + match[0].length;
+            found.add(Number(match[1]));
+
+            if (inTag) {
+                const opened = ATTRIBUTE_OPENED.exec(fixed);
+
+                if (opened === null || opened[1] === "style" || html[from] !== '"') {
+                    throw compileError(`slot "${name}" is only part of what is written there:`
+                        + " a slot is a whole text or a whole attribute, and never a style");
+                }
+
+                fixed = fixed.slice(0, opened.index);
+                from += 1;
+                write = match[2] ? writeBoolean(opened[1]) : writeAttribute(opened[1], this.juris.allowSchemes);
+            }
+
+            parts.push(fixed);
+            slots.push({ name, write });
+            fixed = "";
+        }
+
+        const lost = names.find((name, index) => !found.has(index));
+
+        if (lost !== undefined) {
+            throw compileError(`slot "${lost}" has no place in the markup:`
+                + " a slot is a text or an attribute the element writes, and this one is left out");
+        }
+
+        parts.push(fixed + html.slice(from));
+        return { parts, slots };
+    }
+
+    // One child's place, or a list of them. `select` is whether it is inside a <select>, whose options
+    // are compared with its value, which a place cannot do.
+    checkChild(node, select) {
+        if (Array.isArray(node)) {
+            for (const child of node) this.checkChild(child, select);
+            return;
+        }
+        if (this.juris.isSeatLayout(node)) {
+            throw compileError("a function in a child's place runs on every draw: give a slot");
+        }
+        if (node instanceof FilledLayout) {
+            throw compileError("this layout was already compiled: give it through a slot, as a value");
+        }
+        if (this.juris.isSlot(node)) {
+            this.checkSlot(node, select);
+            return;
+        }
+        if (this.juris.isTextLayout(node)) return;
+
+        const { content, tag } = this.juris.getLayoutEntry(node);
+        this.checkElement(tag, content, select);
+    }
+
+    checkSlot(slot, select) {
+        if (typeof slot.$slot !== "string" || slot.$slot === "") throw compileError(NO_NAME);
+        if (select) {
+            throw compileError(`slot "${slot.$slot}" is inside a <select>, whose options are chosen by its value:`
+                + " compile each <option> instead");
+        }
+    }
+
+    checkElement(tag, content, select) {
+        const lowerTag = tag.toLowerCase();
+        const inSelect = select || lowerTag === "select";
+
+        if (/^[A-Z]/.test(tag) || this.componentManager.has(tag)) {
+            throw compileError(`<${tag}> is a component, which runs on every draw: draw it around a compiled layout`);
+        }
+        if (lowerTag === "style") throw compileError("<style> holds CSS, which is left to the ordinary renderer");
+        if (typeof content === "function") {
+            throw compileError(`<${tag}> is given a function, which runs on every draw: give a slot`);
+        }
+        if (this.juris.isSlot(content)) {
+            this.checkSlot(content, inSelect);
+            return;
+        }
+        if (content === null || typeof content !== "object") return;
+
+        for (const key of Object.keys(content)) {
+            const value = content[key];
+
+            if (key === "innerHTML") throw compileError("innerHTML is markup, which is left to the ordinary renderer");
+            if (key.startsWith("on") && typeof value === "function") continue; // listeners have no HTML
+
+            if (key === "children" && typeof value !== "function") {
+                this.checkChild(value, inSelect);
+            } else {
+                this.checkValue(key, value, content, inSelect);
+            }
+        }
+    }
+
+    // A key's value, and those inside it, as in a style. A slot here that decides more than its own
+    // text is refused. One that is simply left out is found when it is not written (splitAtMarks).
+    checkValue(key, value, content, select) {
+        if (typeof value === "function") {
+            throw compileError(`${key} is a function, which runs on every draw: give a slot`);
+        }
+        if (value === null || typeof value !== "object") return;
+        if (!this.juris.isSlot(value)) {
+            for (const name of Object.keys(value)) this.checkValue(name, value[name], content, select);
+            return;
+        }
+
+        this.checkSlot(value, select);
+        if (key === "encoding") {
+            throw compileError(`slot "${value.$slot}" in encoding decides how what is inside is read: give it as text`);
+        }
+        if ((key === "class" || key === "className") && "classList" in content) {
+            throw compileError(`slot "${value.$slot}" in ${key} is beside a classList, which changes what it gives`);
+        }
+    }
+
+    // A compiled layout in a child's place. Made for HTML outside a <select>, so anywhere else what is
+    // written can differ, and the ordinary renderer writes it.
+    filled(layout, namespace, select) {
+        const plainPlace = namespace === null && (select === null || select === undefined);
+        const html = plainPlace ? layout.written() : null;
+
+        if (html === null) return this.node(layout.ordinary(), namespace, select);
+        if (this.devMode && layout.template.fromFunction) this.holdToOrdinary(layout, html);
+        return html;
+    }
+
+    // A layout written as a function was run once, with slots, so a branch on one took one way for
+    // every row, and nothing can see that when it is compiled. devMode sees what it did.
+    holdToOrdinary(layout, html) {
+        if (this.node(layout.ordinary(), null, null) === html) return;
+        console.warn("Juris.compile: a compiled layout wrote other markup than the same layout drawn with these"
+            + " values: it branched on a slot, which is a place and not a value", layout.values);
+    }
+
+    // A component's root takes the component's key, unless it has its own (Juris.withKey). A compiled
+    // root is known by the layout it stands for.
+    keyed(layout, key) {
+        if (key === undefined) return layout;
+        return this.juris.withKey(layout instanceof FilledLayout ? layout.ordinary() : layout, key);
     }
 
     // ---- values -----------------------------------------------------------------------
@@ -221,6 +517,8 @@ export default class SSRRenderer {
 
     // `select` carries the enclosing <select>'s value so the matching <option> is marked selected.
     node(layout, namespace, select) {
+        if (layout instanceof FilledLayout) return this.filled(layout, namespace, select);
+
         // A list a function in one child's place gives (a seat) is refused, as a component's result is
         // (component), in the words the DOM renderer uses (Juris.oneLayout).
         if (this.juris.isSeatLayout(layout)) {
@@ -261,11 +559,11 @@ export default class SSRRenderer {
             // A promise cannot be waited for: this place renders empty, and the page is incomplete.
             if (this.stateManager.isThenable(result)) this.trace?.flags.add("unresolved");
             const layout = this.juris.definitionLayout(result, instance);
-            return this.node(this.juris.withKey(layout, props.key), namespace, select);
+            return this.node(this.keyed(layout, props.key), namespace, select);
         } catch (error) {
             if (error instanceof FallbackSignal) {
                 if (error.boundary !== instance) throw error;
-                return this.node(this.juris.withKey(error.layout, props.key), namespace, select);
+                return this.node(this.keyed(error.layout, props.key), namespace, select);
             }
             const handled = this.juris.resolveError(instance, error, { phase: "setup", component: name });
             if (!handled) throw error;
@@ -273,7 +571,8 @@ export default class SSRRenderer {
                 if (handled.layout) throw new FallbackSignal(handled.boundary, handled.layout, error);
                 return "";
             }
-            return handled.layout === undefined ? "" : this.node(this.juris.withKey(handled.layout, props.key), namespace, select);
+            if (handled.layout === undefined) return "";
+            return this.node(this.keyed(handled.layout, props.key), namespace, select);
         } finally {
             this.owner = previous;
         }
@@ -368,6 +667,7 @@ export default class SSRRenderer {
                 if (css) attributes.set("style", css);
             } else if (BOOLEAN_ATTRIBUTES.has(key.toLowerCase()) && !drawnIn) {
                 if (untilFound(key, resolved)) attributes.set(key, resolved);
+                else if (this.isMark(resolved)) attributes.set(key, `${resolved}boolean`);
                 else if (resolved) attributes.set(key, true);
             } else if (key === "value" && drawnIn !== NAMESPACES.svg) {
                 hasValue = true;
@@ -463,6 +763,12 @@ export default class SSRRenderer {
             }
         }
         return `${html}</${tag}>`;
+    }
+
+    // Whether `value` is a slot's word, while a layout is compiled: a boolean attribute writes none of
+    // its value, so element writes the word, for compile to find it there.
+    isMark(value) {
+        return this.mark !== null && typeof value === "string" && value.startsWith(this.mark);
     }
 
     // devMode's word for what an element's content leaves out (see element): `key` is the children or

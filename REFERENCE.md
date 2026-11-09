@@ -37,8 +37,8 @@ holds both packages to every line. "Not yet", at the end, lists what is missing.
 - [The boundary](#the-boundary): what may go in `src/`, and the test that holds it
 - [The page contract](#the-page-contract): `#app`, `#state`, `#services`, `start()`, and in development `#juris-dev`
 - [Reserved state roots](#reserved-state-roots): `$route`, `$ssr`, `$local`, `$async`, `$server`, `$live`
-- [The public API](#the-public-api): components, the component api, `enhance`, layouts from a
-  database, and every module
+- [The public API](#the-public-api): components, compiled layouts, the component api, `enhance`,
+  layouts from a database, and every module
 - [What the framework stores in a browser](#what-the-framework-stores-in-a-browser): `STORAGE`
 - [The browser floor](#the-browser-floor): the oldest browsers it runs in
 - [Security defaults and invariants](#security-defaults-and-invariants): each with its code and its test
@@ -6008,6 +6008,8 @@ measured in Chrome at 1,000 rows on 2026-11-08; a row's own work comes on top.
 | Components, props from `getState` | Removing a row | 15 ms |
 | Components, props from `toRaw` | Removing a row | 2 ms |
 
+Those are the browser's. On the server, the rows of a long list can be compiled ("Compiled layouts").
+
 - With plain element rows, any change to the list costs about 13 ms: `updateElement` tears down and
   reapplies every row it keeps.
 
@@ -6212,6 +6214,329 @@ measured in Chrome at 1,000 rows on 2026-11-08; a row's own work comes on top.
   juris.setValue("rows.1.label", "Bread");
   page.innerHTML; // → <ul><li>Milk</li><li>Bread</li></ul>
   ```
+
+### Compiled layouts
+
+The examples on this page share a server instance given the string renderer:
+
+```js setup
+import Juris from "juris/juris.js";
+import SSRRenderer from "juris-kit/server/ssr-renderer.js";
+
+const juris = new Juris({ isServer: true, features: { ssr: SSRRenderer } });
+```
+
+`juris.compile` is for one shape drawn many times with different values: a table's rows, a feed, a
+report. The server draws the layout once, keeps the fixed text, and from then on only fills in the
+values. There is no build step and no generated code: it happens as the app starts, and what it
+makes is data.
+
+Mark what changes with a slot:
+
+```js
+const row = juris.compile((slot) => ({
+    tr: {
+        key: slot("id"),
+        children: [{ td: slot("label") }],
+    },
+}));
+
+juris.renderToString(row({ id: 7, label: "Milk" }));
+// → <tr data-key="7"><td>Milk</td></tr>
+```
+
+The numbers here are approximate, measured on Node 24 at 1,000 rows on 2026-11-08.
+
+| 1,000 rows, drawn on the server | About |
+| --- | --- |
+| Ordinary layouts | 2 to 3 ms |
+| Compiled | 0.4 ms |
+
+A small page gains nothing worth measuring, as it is drawn in about 0.01 ms already. Compile the
+rows of a long list and leave the rest of the page as it is.
+
+#### Drawing a compiled layout
+
+What the compiled function gives goes wherever a layout goes:
+
+```js
+const item = juris.compile((slot) => ({ li: slot("label") }));
+const items = [{ label: "Milk" }, { label: "Eggs" }];
+
+juris.renderToString({
+    ul: {
+        children: [{ li: "Today" }, ...items.map(item)],
+    },
+});
+// → <ul><li>Today</li><li>Milk</li><li>Eggs</li></ul>
+```
+
+Compile once, in `register(juris)`, and never in a component, which would compile on every draw:
+
+```js
+function register(juris) {
+    const row = juris.compile((slot) => ({
+        tr: {
+            key: slot("id"),
+            children: [{ td: slot("label") }],
+        },
+    }));
+
+    juris.registerComponent("Orders", (props, api) => ({
+        table: {
+            children: () => api.getState("orders").map(row),
+        },
+    }));
+}
+
+register(juris);
+juris.setValue("orders", [{ id: 1, label: "Milk" }]);
+juris.renderToString({ Orders: {} });
+// → <table><tr data-key="1"><td>Milk</td></tr></table>
+```
+
+The same code runs in the browser, where the compiled function gives the ordinary layout. So rows
+stay keyed and live there, and the markup the server wrote is what the browser expects:
+
+```js
+const browser = new Juris();
+const cell = browser.compile((slot) => ({
+    td: {
+        title: slot("hint"),
+        textContent: slot("label"),
+    },
+}));
+
+cell({ hint: "Fresh", label: "Milk" });
+// → { td: { title: "Fresh", textContent: "Milk" } }
+```
+
+A listener can read a slot. The server writes no listener, and the browser runs the layout's function
+for each row, so `slot` reads that row's value when the button is clicked:
+
+```js
+const removed = [];
+const layout = (slot) => ({
+    button: {
+        onclick: () => removed.push(slot("id")),
+        textContent: slot("label"),
+    },
+});
+
+const onServer = juris.compile(layout);
+juris.renderToString(onServer({ id: 7, label: "Remove" }));
+// → <button>Remove</button>
+
+const inBrowser = new Juris().compile(layout);
+inBrowser({ id: 7, label: "Remove" }).button.onclick();
+removed; // → [7]
+```
+
+#### What a slot holds
+
+A slot holds a whole text or a whole attribute:
+
+```js
+const link = juris.compile((slot) => ({
+    a: {
+        href: slot("url"),
+        children: ["Open ", slot("name")],
+    },
+}));
+
+juris.renderToString(link({ url: "/orders/7", name: "order 7" }));
+// → <a href="/orders/7">Open order 7</a>
+```
+
+It also holds a boolean attribute. `false` and `null` leave the attribute out:
+
+```js
+const box = juris.compile((slot) => ({
+    input: {
+        type: "checkbox",
+        checked: slot("done"),
+    },
+}));
+
+juris.renderToString(box({ done: true }));
+// → <input type="checkbox" checked="">
+juris.renderToString(box({ done: false }));
+// → <input type="checkbox">
+```
+
+Everything is escaped and checked as in any layout. A `null` writes no text and no attribute:
+
+```js
+const card = juris.compile((slot) => ({
+    a: {
+        href: slot("url"),
+        title: slot("hint"),
+        textContent: slot("label"),
+    },
+}));
+
+juris.renderToString(card({ url: "/a", hint: null, label: "<Milk>" }));
+// → <a href="/a">&lt;Milk&gt;</a>
+juris.renderToString(card({ url: "javascript:alert(1)", hint: "Hi", label: "Milk" }));
+// → <a title="Hi">Milk</a>
+```
+
+A value that is not text is drawn from the ordinary layout: the same result, at the ordinary speed.
+So are the rows of an `<svg>`, of a `<select>` with a value, and of a component given a `key`:
+
+```js
+const slotted = juris.compile((slot) => ({
+    td: {
+        children: [slot("inside")],
+    },
+}));
+
+juris.renderToString(slotted({ inside: "Milk" }));
+// → <td>Milk</td>
+juris.renderToString(slotted({ inside: { b: "Milk" } }));
+// → <td><b>Milk</b></td>
+
+const option = juris.compile((slot) => ({
+    option: {
+        value: slot("id"),
+        textContent: slot("name"),
+    },
+}));
+
+juris.renderToString({
+    select: {
+        value: "b",
+        children: [option({ id: "a", name: "One" }), option({ id: "b", name: "Two" })],
+    },
+});
+// → <select><option value="a">One</option><option value="b" selected="">Two</option></select>
+```
+
+A slot reads a field of the values' own, never one they inherit:
+
+```js
+const own = juris.compile({ td: { $slot: "constructor" } });
+
+juris.renderToString(own({}));
+// → <td></td>
+```
+
+#### A slot is a place, not a value
+
+The layout's function runs once, when it is compiled, so `slot` gives a place and no value yet.
+Using it as a value is refused:
+
+```js
+juris.compile((slot) => ({ td: `Hello ${slot("name")}` }));
+// throws TypeError: Juris.compile: slot("name") is a place, not a value
+```
+
+Give the text its own place, or build it before the values go in:
+
+```js
+const hello = juris.compile((slot) => ({ td: { children: ["Hello ", slot("name")] } }));
+juris.renderToString(hello({ name: "Ada" }));
+// → <td>Hello Ada</td>
+```
+
+A branch on a slot cannot be refused, as nothing can see it: every row takes the same way. `devMode`
+compares each row with the ordinary layout, and says so:
+
+```js
+const dev = new Juris({ isServer: true, devMode: true, features: { ssr: SSRRenderer } });
+const stock = dev.compile((slot) => ({ td: slot("sold") ? "Sold" : "In stock" }));
+
+dev.renderToString(stock({ sold: false }));
+// console.warn: Juris.compile: a compiled layout wrote other markup
+```
+
+Decide before the values go in, and give the answer:
+
+```js
+const stock = juris.compile((slot) => ({ td: slot("status") }));
+const status = (item) => ({ status: item.sold ? "Sold" : "In stock" });
+
+juris.renderToString(stock(status({ sold: false })));
+// → <td>In stock</td>
+```
+
+#### What `compile` refuses
+
+Each of these throws when it is compiled, so the mistake shows when the server starts and not on a
+page. In each, the layout could not be written the same for every value.
+
+| Given | Why | Do this instead |
+| --- | --- | --- |
+| A function that is not a listener | It runs on every draw | A slot |
+| A component | It runs on every draw | Draw it around compiled rows |
+| `innerHTML`, `<style>` | Written raw | An ordinary layout |
+| A slot inside a `<select>` | Its options are chosen by its value | Compile each `<option>` |
+| A slot in a `style`, a `classList` or `encoding`, or a class beside a `classList` | It decides more than its own text | An ordinary layout around the compiled part |
+| A slot the element never writes | A void element's text, a refused attribute or tag | Move the slot |
+
+```js
+juris.compile({ td: { textContent: () => "now" } });
+// throws TypeError: Juris.compile: textContent is a function
+juris.compile({ td: { children: [{ Badge: {} }] } });
+// throws TypeError: Juris.compile: <Badge> is a component
+juris.compile({ div: { innerHTML: "<b>Milk</b>" } });
+// throws TypeError: Juris.compile: innerHTML is markup
+juris.compile({ select: { value: { $slot: "chosen" } } });
+// throws TypeError: Juris.compile: slot "chosen" is inside a <select>
+juris.compile({ div: { style: { width: { $slot: "size" } } } });
+// throws TypeError: Juris.compile: slot "size" is only part of what is written there
+juris.compile({ img: { textContent: { $slot: "label" } } });
+// throws TypeError: Juris.compile: slot "label" has no place in the markup
+```
+
+A row that cannot compile as a whole can still compile its parts:
+
+```js
+const cell = juris.compile((slot) => ({ td: slot("label") }));
+const row = (item) => ({
+    tr: {
+        style: { color: item.color },
+        children: [cell(item)],
+    },
+});
+
+juris.renderToString(row({ color: "red", label: "Milk" }));
+// → <tr style="color:red"><td>Milk</td></tr>
+```
+
+#### Compiling a layout from a database
+
+A slot written as `{ "$slot": "label" }` is one JSON can hold, so a stored layout compiles too. Pass
+it through `layoutFromData` first, which leaves out what it names and may not draw:
+
+```js
+const stored = JSON.parse(`{
+    "tr": {
+        "children": [
+            { "td": { "$slot": "label" } },
+            { "RefundButton": { "order": { "$slot": "id" } } }
+        ]
+    }
+}`);
+
+const row = juris.compile(juris.layoutFromData(stored));
+
+juris.renderToString(row({ id: 7, label: "Milk" }));
+// → <tr><td>Milk</td></tr>
+```
+
+A stored layout stays data: compiling runs nothing it holds, and a slot in it is held to every rule
+above. It can still name any field of the values, so give it only what the page may show:
+
+```js
+const row = juris.compile(JSON.parse('{ "td": { "$slot": "password" } }'));
+const account = { name: "Ada", password: "secret" };
+
+juris.renderToString(row(account));
+// → <td>secret</td>
+juris.renderToString(row({ name: account.name }));
+// → <td></td>
+```
 
 ### The component api
 
@@ -7256,6 +7581,15 @@ What an app calls on an instance:
   const juris = new Juris();
   juris.layoutFromData({ ul: { children: [{ RefundButton: { order: 7 } }] } });
   // → { ul: { children: [] } }
+  ```
+
+- `compile(layout)`: a function that draws one shape many times, filled with its values ("Compiled
+  layouts").
+
+  ```js
+  const juris = new Juris();
+  const row = juris.compile((slot) => ({ td: slot("label") }));
+  row({ label: "Milk" }); // → { td: "Milk" }
   ```
 
 - `registerComponent`, `hasComponent`, `install`
@@ -21003,6 +21337,15 @@ new SSRRenderer(bare);
 bare.renderToString({ h1: "Shop" }); // → <h1>Shop</h1>
 ```
 
+It is what makes `juris.compile` fast ("Compiled layouts"): given it, an instance draws a compiled
+layout from fixed text, and writes the markup the ordinary layout would have written.
+
+```js
+const row = juris.compile((slot) => ({ td: slot("label") }));
+juris.renderToString(row({ label: "<Milk>" })); // → <td>&lt;Milk&gt;</td>
+juris.renderToString({ td: "<Milk>" }); // → <td>&lt;Milk&gt;</td>
+```
+
 The kit's server does that for its own instance (`createJurisServer`); an app or a test that builds
 a server instance itself, for `createPagePipeline`, gives it the feature too.
 
@@ -26317,6 +26660,17 @@ function request(url, path, { method = "GET", headers = {}, body } = {}) {
 
 **Rendering and the browser** (`juris.js`, `html-safety.js`, both renderers (`dom-renderer.js` and
 the kit's `server/ssr-renderer.js`), `router.js`, `client.js`)
+
+- A compiled layout writes what the ordinary renderer writes for the same layout and values,
+  hostile ones included, and is refused when compiled if it could not. Compiling makes data, never
+  code. `juris-tests/tests/juris-kit/ssr-renderer.compile.test.mjs`.
+
+  ```js
+  const row = juris.compile((slot) => ({ a: { href: slot("url"), textContent: slot("label") } }));
+  const values = { url: "javascript:alert(1)", label: "<img src=x onerror=alert(1)>" };
+  juris.renderToString(row(values));
+  // → <a>&lt;img src=x onerror=alert(1)&gt;</a>
+  ```
 
 - `layoutFromData` leaves out every component a layout from data names, wherever it stands, its
   props included, unless the call lists it. `juris-tests/tests/juris/juris.layout-from-data.test.mjs`.
