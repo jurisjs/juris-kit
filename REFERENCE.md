@@ -13556,7 +13556,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const registry = window.__JURIS_DEVTOOLS__;
   registry.registry; // → 1
   registry.list();
-  // → [{ id: 1, protocol: 1, juris: "0.93.0", codeId: null, root: "app" }]
+  // → [{ id: 1, protocol: 1, juris: "0.93.1", codeId: null, root: "app" }]
   registry.get(1) === endpoint; // → true
   registry.get("1"); // → null
   ```
@@ -13571,7 +13571,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       describe: () => ({
           id: 7,
           protocol: 1,
-          juris: "0.93.0",
+          juris: "0.93.1",
           codeId: "b2",
           root: null,
       }),
@@ -13791,7 +13791,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   ```js dom
   const { endpoint, panel } = cartPage({ privatePaths: ["session"] });
   endpoint.request(panel, "hello").result;
-  // → { protocol: 1, juris: "0.93.0", codeId: null, id: 1, mounted: true,
+  // → { protocol: 1, juris: "0.93.1", codeId: null, id: 1, mounted: true,
   //     dev: null, topics: ["tree", "timeline"],
   //     privateRoots: ["$server", "session"] }
   ```
